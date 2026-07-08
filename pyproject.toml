@@ -9,6 +9,7 @@ description = "Nix-first CLI worker for synchronizing Traktor playlists with M3U
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+  "traktor-nml-utils>=4.1.0",
   "typer>=0.16.0",
 ]
 
@@ -29,6 +30,7 @@ packages = ["src/traktor_m3u_sync"]
 include = ["src", "tests"]
 pythonVersion = "3.14"
 typeCheckingMode = "strict"
+stubPath = "typings"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

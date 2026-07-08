@@ -4,9 +4,13 @@ CLI worker for bidirectional synchronization between Traktor Pro playlist collec
 
 ## Status
 
-**Phase 0 complete** — repo tooling, package wiring, and canonical docs are in place. No sync logic implemented yet.
+**Phase 1 export slice available** — the repository can now export standard playlists from Traktor `collection.nml` into UTF-8 `.m3u8` files.
 
-Next up: [Phase 1 — NML export foundation](PLAN.md).
+Current limitations:
+
+- import / NML write-back is not implemented yet
+- smartlists are skipped with warnings
+- reporting is structured stdout/stderr only for now
 
 ## Quick start
 
@@ -21,6 +25,35 @@ just setup
 just check
 ```
 
+## Export configuration
+
+Create a TOML config file such as `traktor-m3u-sync.toml`:
+
+```toml
+[library]
+traktor_root = "C:/Music"
+m3u_root = "../music"
+
+[export]
+collection_path = "/path/to/collection.nml"
+output_dir = "/path/to/playlists"
+```
+
+Then run:
+
+```bash
+traktor-m3u-sync export --config traktor-m3u-sync.toml
+```
+
+You can override export workflow paths on the CLI:
+
+```bash
+traktor-m3u-sync export \
+  --config traktor-m3u-sync.toml \
+  --collection /path/to/collection.nml \
+  --output-dir /path/to/playlists
+```
+
 ## Commands
 
 | Command         | What it does                                     |
@@ -33,6 +66,14 @@ just check
 | `just test`       | run pytest                                         |
 | `just check`      | all of the above (fmt-check + lint + type + test)  |
 | `just lock`       | regenerate `uv.lock`                               |
+
+## Export behavior
+
+- exports one UTF-8 `.m3u8` file per standard Traktor playlist
+- preserves playlist folder hierarchy while omitting `$ROOT`
+- prefers `PRIMARYKEY` for track paths and falls back to reconstructed `LOCATION`
+- minimally sanitizes filesystem-invalid playlist and folder names
+- emits structured warnings for skipped smartlists and unmappable tracks
 
 ## Project layout
 

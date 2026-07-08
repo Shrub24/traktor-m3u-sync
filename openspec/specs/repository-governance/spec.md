@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Provide canonical repository documentation that defines architecture direction, conventions, and ongoing documentation maintenance expectations.
+
+## Requirements
 
 ### Requirement: Repository root documents project direction
 The repository SHALL include canonical root-level documents that describe project architecture direction, near-term plan, and repository conventions.

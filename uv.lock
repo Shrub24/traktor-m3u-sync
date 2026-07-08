@@ -167,6 +167,7 @@ name = "traktor-m3u-sync"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "traktor-nml-utils" },
     { name = "typer" },
 ]
 
@@ -178,13 +179,29 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "typer", specifier = ">=0.16.0" }]
+requires-dist = [
+    { name = "traktor-nml-utils", specifier = ">=4.1.0" },
+    { name = "typer", specifier = ">=0.16.0" },
+]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "pyright", specifier = ">=1.1.403" },
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "ruff", specifier = ">=0.12.1" },
+]
+
+[[package]]
+name = "traktor-nml-utils"
+version = "4.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typer" },
+    { name = "xsdata" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/15/64/3ff077ba741990fe26576f7dd809878ea6adbca606a3b2fbc7b918a2ac78/traktor_nml_utils-4.1.0.tar.gz", hash = "sha256:6f9c4e586651afe96c5bb9a042ed87e678d501b580e5552bfb53bc40aab78d03", size = 27057, upload-time = "2026-07-08T11:08:36.701Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d9/5a/7728c6e6ba2fb37bcd9b1d040ba6c77d15241cddc06b3c12472fa18c9042/traktor_nml_utils-4.1.0-py3-none-any.whl", hash = "sha256:e0a6bb8a419f0ec4a75ef84f9af04ae8b952b2f57044dce7c16188acbbb9f504", size = 25435, upload-time = "2026-07-08T11:08:35.336Z" },
 ]
 
 [[package]]
@@ -209,4 +226,16 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f6/cc/6253133b5bb138fc3306cebfbda2c520f545d36b5be2c7255cc528bb45d6/typing_extensions-4.16.0.tar.gz", hash = "sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5", size = 113555, upload-time = "2026-07-02T08:40:05.92Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl", hash = "sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8", size = 45571, upload-time = "2026-07-02T08:40:04.659Z" },
+]
+
+[[package]]
+name = "xsdata"
+version = "26.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2f/c9/71e9e8eac669091fd434ed494d806c8cc37614aecb34ce4c62c283f99abf/xsdata-26.2.tar.gz", hash = "sha256:c631af71aaa75734f8ce92a08fcf8389d905dee2aab0b5032c9032e9071009a6", size = 349690, upload-time = "2026-02-15T16:13:31.274Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d3/92/f0edcbc2f895ecea14a68e492b24c157625e251279a94b172a6b263290e7/xsdata-26.2-py3-none-any.whl", hash = "sha256:85a591a4405d903416afbd4a917e8dda8ea44641a3e66d72134bc2a31b3c16b0", size = 235561, upload-time = "2026-02-15T16:13:29.614Z" },
 ]

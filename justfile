@@ -22,6 +22,9 @@ type:
 test:
     uv run pytest
 
+run-export:
+    uv run traktor-m3u-sync export --config traktor-m3u-sync.toml
+
 check: fmt-check lint type test
 
 lock:

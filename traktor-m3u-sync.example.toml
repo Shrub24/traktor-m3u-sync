@@ -1,0 +1,17 @@
+# Example configuration for traktor-m3u-sync
+# Copy to traktor-m3u-sync.toml and adjust paths for your setup.
+
+[library]
+# Traktor's library root (Windows path format, forward slashes OK)
+traktor_root = "C:/Music"
+
+# M3U library root (can be absolute or relative)
+# Relative roots produce playlist entries relative to the output directory
+m3u_root = "../music"
+
+[export]
+# Path to the Traktor collection.nml file
+collection_path = "/path/to/collection.nml"
+
+# Directory where exported .m3u8 files will be written
+output_dir = "/path/to/playlists"

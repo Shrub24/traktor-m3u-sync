@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Provide a reproducible developer environment, Python project wiring, standardized local commands, and baseline quality tooling for the repository.
+
+## Requirements
 
 ### Requirement: Reproducible developer workspace
 The repository SHALL provide a reproducible local developer workspace for the sync project using Nix as the primary environment entry point and Python 3.14 as the preferred runtime.
@@ -15,11 +19,15 @@ The repository SHALL define a standard Python project layout and metadata for th
 - **THEN** they can find Python packaging metadata, dependency declarations, and a `src/`-based package structure that matches the documented CLI and package names
 
 ### Requirement: Local quality commands are standardized
-The repository SHALL provide standardized local commands for formatting, linting, type checking, and tests.
+The repository SHALL provide standardized local commands for formatting, linting, type checking, tests, and common workflow operations.
 
 #### Scenario: Developer runs local checks
 - **WHEN** a developer follows the documented local workflow
 - **THEN** they can run the canonical format, lint, type, and test commands through repository-provided task runner or hook integrations rather than ad hoc shell commands
+
+#### Scenario: Developer runs a workflow command
+- **WHEN** a developer wants to run the export workflow using a local config file
+- **THEN** they can use a standardized task runner recipe that invokes the CLI with the default local config path
 
 ### Requirement: Local automation remains lightweight
 The bootstrap SHALL include lightweight local automation hooks but MUST NOT require a full production CI/CD pipeline in this change.
