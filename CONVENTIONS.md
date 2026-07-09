@@ -25,7 +25,7 @@
 - TOML is the config file format.
 - Package name: `traktor_m3u_sync`
 - CLI name: `traktor-m3u-sync`
-- License direction: GPL-compatible
+- License: GPL-3.0-or-later
 
 ## Repo workflow
 
@@ -41,11 +41,21 @@
 - Update documentation when conventions, architecture, or workflow expectations change.
 - If a decision is temporary or provisional, say so explicitly.
 
+## Deployment surfaces
+
+- The flake exposes a runtime package (`packages.<system>.traktor-m3u-sync`) built with `buildPythonApplication`.
+- A flake app (`apps.<system>.default`) wraps the package for `nix run` convenience.
+- A NixOS module (`nixosModules.traktor-m3u-sync`) provides declarative export/import oneshot services.
+- The module renders TOML config from Nix options into the Nix store; services invoke the CLI with `--config`.
+- An optional `configFile` override lets operators provide an externally managed TOML file instead.
+- Orchestration policy (timers, path units, Syncthing hooks) is intentionally excluded from the base module — downstream consumers attach scheduling via standard NixOS mechanisms.
+- The TOML config contract remains the primary CLI interface; the module's Nix-level options map 1:1 to the same TOML structure.
+
 ## Formatting and checks
 
 - Use repo-provided commands rather than one-off shell snippets when available.
 - Keep formatting automated and deterministic.
-- Prefer the canonical `just` entry points (`setup`, `fmt`, `fmt-check`, `lint`, `type`, `test`, `check`, `lock`) over direct tool invocation during normal development.
+- Prefer the canonical `just` entry points (`setup`, `fmt`, `fmt-check`, `lint`, `type`, `test`, `check`, `lock`, `pkg-build`, `app-run`, `module-check`) over direct tool invocation during normal development.
 - Run the smallest meaningful validation set for the current change, then run required OpenSpec validation before handoff.
 
 ## Scope control

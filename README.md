@@ -54,18 +54,96 @@ traktor-m3u-sync export \
   --output-dir /path/to/playlists
 ```
 
+## Deployment (Nix)
+
+The flake exposes a runtime package, an app shortcut, and a NixOS module.
+
+### Build the package
+
+```bash
+nix build .#packages.x86_64-linux.traktor-m3u-sync
+./result/bin/traktor-m3u-sync --help
+```
+
+### Run via `nix run`
+
+```bash
+nix run .#default -- export --config traktor-m3u-sync.toml
+nix run .#default -- import --config traktor-m3u-sync.toml
+```
+
+### NixOS module
+
+The flake exposes `nixosModules.traktor-m3u-sync` with declarative service
+configuration. The module renders a TOML config into the Nix store and runs
+separate oneshot `export` and `import` systemd services.
+
+```nix
+{
+  inputs.traktor-m3u-sync.url = "github:you/traktor-m3u-sync";
+
+  # ...
+  services.traktor-m3u-sync = {
+    enable = true;
+    library = {
+      traktor_root = "/mnt/traktor";
+      m3u_root = "/mnt/music";
+    };
+    export = {
+      enable = true;
+      collection_path = "/mnt/traktor/collection.nml";
+      output_dir = "/mnt/playlists";
+    };
+    import = {
+      enable = true;
+      collection_path = "/mnt/traktor/collection.nml";
+      import_dir = "/mnt/playlists";
+      sandbox_name = "Imported Playlists";
+    };
+  };
+}
+```
+
+#### Config override
+
+Set `configFile` to use an externally managed TOML file instead of rendering
+from Nix options:
+
+```nix
+services.traktor-m3u-sync = {
+  enable = true;
+  configFile = "/etc/traktor-m3u-sync/config.toml";
+  export.enable = true;
+  import.enable = true;
+};
+```
+
+When `configFile` is set, the module uses it directly. In that mode, the
+runtime workflow values come from the external TOML file rather than the
+corresponding Nix option blocks.
+
+#### Downstream orchestration
+
+Services are oneshot units with `wantedBy = []` by default — no timers, path
+triggers, or Syncthing hooks are bundled. Attach scheduling or filesystem
+triggers in your own NixOS config (e.g. `systemd.timers` or Syncthing folder
+watch hooks) as downstream orchestration policy.
+
 ## Commands
 
-| Command         | What it does                                     |
-| --------------- | ------------------------------------------------ |
-| `just setup`      | sync Python deps (`uv sync --dev`) and install git hooks |
-| `just fmt`        | auto-format all files (`nix fmt`)                  |
-| `just fmt-check`  | check formatting without rewriting (`nix flake check`) |
-| `just lint`       | run Ruff linter                                    |
-| `just type`       | run Pyright type checker                           |
-| `just test`       | run pytest                                         |
-| `just check`      | all of the above (fmt-check + lint + type + test)  |
-| `just lock`       | regenerate `uv.lock`                               |
+| Command           | What it does                                               |
+| ----------------- | ---------------------------------------------------------- |
+| `just setup`      | sync Python deps (`uv sync --dev`) and install git hooks   |
+| `just fmt`        | auto-format all files (`nix fmt`)                          |
+| `just fmt-check`  | check formatting without rewriting (`nix flake check`)     |
+| `just lint`       | run Ruff linter                                            |
+| `just type`       | run Pyright type checker                                   |
+| `just test`       | run pytest                                                 |
+| `just check`      | all of the above (fmt-check + lint + type + test)          |
+| `just lock`       | regenerate `uv.lock`                                       |
+| `just pkg-build`  | build the Nix runtime package                              |
+| `just app-run`    | run the CLI via `nix run`                                  |
+| `just module-check` | evaluate the NixOS module with a minimal config          |
 
 ## Export behavior
 
@@ -127,8 +205,11 @@ traktor-m3u-sync import \
 .
 ├── src/traktor_m3u_sync/   # Python package (CLI entry point)
 ├── tests/                  # pytest test suite
+├── nix/
+│   ├── packages/           # Nix package definitions (traktor-nml-utils)
+│   └── modules/            # NixOS module definitions
 ├── openspec/               # change proposals, specs, archive
-├── flake.nix               # Nix workspace (Python 3.14, tools)
+├── flake.nix               # Nix workspace (packages, apps, modules)
 ├── treefmt.nix             # formatting config (nixfmt, ruff)
 ├── pyproject.toml          # Python project metadata and tool config
 ├── justfile                # task runner recipes
@@ -156,7 +237,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for full details and NML format notes.
 | 0     | Repo bootstrap, tooling, docs               | ✓ Done      |
 | 1     | NML → M3U8 export                           | ✓ Done      |
 | 2     | M3U8 → NML sandbox import                   | ✓ Done      |
-| 3     | Config/reporting polish, operational niceties | Planned   |
+| 3     | Config/reporting polish, deployment surfaces | In Progress |
 | 4     | Smartlists, watch mode, Navidrome, etc.     | Deferred    |
 
 See [PLAN.md](PLAN.md) for the full plan and tentative OpenSpec change trajectory.
@@ -176,7 +257,7 @@ See [PLAN.md](PLAN.md) for the full plan and tentative OpenSpec change trajector
 
 ## License
 
-GPL-compatible (exact license TBD).
+This project is licensed under **GPL-3.0-or-later**.
 
 ## Dependencies
 

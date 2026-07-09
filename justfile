@@ -27,5 +27,15 @@ run-export:
 
 check: fmt-check lint type test
 
+# Nix runtime artifact validation
+pkg-build:
+	nix build .#packages.x86_64-linux.traktor-m3u-sync --no-link --print-out-paths
+
+app-run:
+	nix run .#default -- --help
+
+module-check:
+	nix build .#checks.x86_64-linux.module-eval --no-link --print-out-paths
+
 lock:
     uv lock

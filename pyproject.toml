@@ -7,6 +7,7 @@ name = "traktor-m3u-sync"
 version = "0.1.0"
 description = "Nix-first CLI worker for synchronizing Traktor playlists with M3U8 files."
 readme = "README.md"
+license = "GPL-3.0-or-later"
 requires-python = ">=3.14"
 dependencies = [
   "traktor-nml-utils>=4.1.0",

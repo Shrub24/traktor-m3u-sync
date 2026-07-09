@@ -54,6 +54,9 @@ Sub-areas:
 
 **Intent:** Harden configuration, improve reporting, and add operational niceties for automated/scheduled use.
 
+**Completed OpenSpec changes:**
+- `deployment-packaging` — Nix runtime package, app output, NixOS module with declarative config and separate export/import services
+
 **Planned OpenSpec changes:** `sync-config`, `sync-reporting` (split as needed)
 
 Sub-areas:

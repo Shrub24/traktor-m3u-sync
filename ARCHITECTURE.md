@@ -56,6 +56,15 @@ The planned architecture is a small CLI-oriented application with clear subsyste
 - `traktor-nml-utils` (v4.0.0+) is the primary NML parsing library. It uses xsdata-generated dataclasses that model the full NML schema (entries, locations, cues, playlists, etc.). If xsdata write round-tripping proves fragile, fall back to direct `lxml` writes using the same models as reference.
 - The sync worker runs on Linux/NixOS; the Traktor import target is Windows-first.
 - Path mappings are configurable in design, even if the first deployment uses a fixed mapping.
+- The flake exposes a real runtime package (not just a dev shell) built with `buildPythonApplication` and `lib.cleanSource`.
+- A flake app output (`nix run .#default`) delegates to the packaged CLI binary.
+- `traktor-nml-utils` is packaged as a Nix derivation from PyPI since it is not in nixpkgs.
+- A NixOS module (`nixosModules.traktor-m3u-sync`) exposes separate oneshot `export` and `import` service surfaces with an overridable `package` option.
+- Declarative TOML config is rendered into the Nix store; services invoke the CLI with `--config` pointing at the store path.
+- An optional `configFile` override lets operators provide an externally managed TOML file instead of rendering from Nix options.
+- Orchestration policy (timers, path triggers, Syncthing hooks) is intentionally excluded from the base module — downstream consumers attach scheduling via standard NixOS mechanisms.
+- The TOML config contract remains the primary CLI interface; the module's Nix-level options map 1:1 to the same TOML structure.
+- The repository license is GPL-3.0-or-later.
 
 ## NML format: key structures and path handling
 

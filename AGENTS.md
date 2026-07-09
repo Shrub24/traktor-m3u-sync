@@ -60,6 +60,10 @@ Use subagents when the workflow is genuinely multi-step or specialized. Favor th
 - `treefmt-nix` for formatting orchestration
 - Lightweight automation with `just` and `lefthook`
 - Fail-fast internals, validation at I/O boundaries
+- Runtime package, app, and NixOS module exposed as flake outputs
+- TOML rendered from Nix for declarative config; optional `configFile` override for external management
+- Repository license: GPL-3.0-or-later
+- No timers, path units, or host-specific orchestration in the base module — downstream policy only
 
 ## Prohibited habits
 

@@ -1,8 +1,4 @@
-## Purpose
-
-Provide a reproducible developer environment, Python project wiring, standardized local commands, and baseline quality tooling for the repository.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Reproducible developer workspace
 The repository SHALL provide a reproducible local developer workspace for the sync project using Nix as the primary environment entry point and Python 3.14 as the preferred runtime.
