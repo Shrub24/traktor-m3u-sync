@@ -2,9 +2,9 @@
 
 ## Current focus
 
-**Phase 0 is complete.** The repo has a working Nix-first Python 3.14 environment, package/CLI wiring, canonical docs, and validated local tooling.
+**Phases 0–2 are complete.** The repo has a working Nix-first Python 3.14 environment, NML→M3U8 export, and M3U8→NML sandbox import.
 
-Next up: **Phase 1 — NML export foundation**.
+Next up: **Phase 3 — Refinement and operational polish**.
 
 ## Phase plan
 
@@ -18,11 +18,11 @@ Next up: **Phase 1 — NML export foundation**.
 
 **Status:** Complete (`openspec/changes/repo-bootstrap`)
 
-### Phase 1 — NML export foundation
+### Phase 1 — NML export foundation ✓
 
 **Intent:** Read a Traktor `collection.nml` and export playlists to standard UTF-8 `.m3u8` files on disk, preserving the Traktor folder hierarchy.
 
-**Planned OpenSpec change:** `nml-export`
+**OpenSpec change:** `nml-export`
 
 Sub-areas:
 1. **NML loading** — use `traktor-nml-utils` to parse `collection.nml` into typed models
@@ -34,11 +34,11 @@ Sub-areas:
 7. **CLI wiring** — `traktor-m3u-sync export --collection <nml> --output-dir <dir>`
 8. **Config** — TOML config for path mappings and export settings
 
-### Phase 2 — Sandbox import foundation
+### Phase 2 — Sandbox import foundation ✓
 
 **Intent:** Read incoming `.m3u8` playlists and rebuild a designated sandbox folder node inside Traktor `collection.nml`, using a strict overwrite model.
 
-**Planned OpenSpec change:** `nml-import`
+**OpenSpec change:** `nml-import`
 
 Sub-areas:
 1. **M3U8 reading** — parse `.m3u8` files, extract track paths and `#EXTINF` metadata

@@ -1,4 +1,5 @@
 from .collection import (
+    Collectiontype,
     Entrytype,
     Infotype,
     Locationtype,
@@ -12,6 +13,7 @@ from .collection import (
 )
 
 __all__ = [
+    "Collectiontype",
     "Entrytype",
     "Infotype",
     "Locationtype",
