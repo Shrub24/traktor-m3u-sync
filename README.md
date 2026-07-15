@@ -57,6 +57,9 @@ traktor-m3u-sync export \
 ## Deployment (Nix)
 
 The flake exposes a runtime package, an app shortcut, and a NixOS module.
+See [docs/nix-deployment.md](docs/nix-deployment.md) for the full Nix reference
+(flake outputs, module options, configFile behavior, systemd timer examples,
+and `traktor-nml-utils` packaging notes).
 
 ### Build the package
 
@@ -139,6 +142,7 @@ watch hooks) as downstream orchestration policy.
 | `just lint`       | run Ruff linter                                            |
 | `just type`       | run Pyright type checker                                   |
 | `just test`       | run pytest                                                 |
+| `just run-export` | run the export CLI with the local config                   |
 | `just check`      | all of the above (fmt-check + lint + type + test)          |
 | `just lock`       | regenerate `uv.lock`                                       |
 | `just pkg-build`  | build the Nix runtime package                              |

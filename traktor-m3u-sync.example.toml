@@ -11,7 +11,17 @@ m3u_root = "../music"
 
 [export]
 # Path to the Traktor collection.nml file
-collection_path = "/path/to/collection.nml"
+# collection_path = "/path/to/collection.nml"
 
 # Directory where exported .m3u8 files will be written
-output_dir = "/path/to/playlists"
+# output_dir = "/path/to/playlists"
+
+[import]
+# Path to the Traktor collection.nml file
+# collection_path = "/path/to/collection.nml"
+
+# Directory containing M3U files to import
+# import_dir = "/path/to/playlists"
+
+# Sandbox name in the Traktor collection (default: "Imported Playlists")
+# sandbox_name = "Imported Playlists"
