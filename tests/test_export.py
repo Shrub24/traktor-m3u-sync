@@ -1,124 +1,147 @@
+"""Tests for the NML import and M3U export legs (collection.nml -> store -> .m3u8)."""
+
 from __future__ import annotations
 
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
+from traktor_nml_utils import TraktorCollection
+from traktor_nml_utils.models.collection import Entrytype, Locationtype
 from typer.testing import CliRunner
 
 from traktor_m3u_sync.cli import app
-from traktor_m3u_sync.config import ConfigError, LibraryConfig, apply_export_overrides, load_config
-from traktor_m3u_sync.export_service import run_export
-from traktor_m3u_sync.m3u_writer import write_m3u8
-from traktor_m3u_sync.nml_reader import load_collection
-from traktor_m3u_sync.pathmap import PathTranslationError, translate_track_path
-from traktor_m3u_sync.playlist_tree import (
-    ExportTrack,
-    PlaylistTrackSource,
-    extract_playlist_nodes,
+from traktor_m3u_sync.config import (
+    AppConfig,
+    ConfigError,
+    LibraryConfig,
+    M3uConfig,
+    NmlConfig,
+    StoreConfig,
+    apply_export_overrides,
+    load_config,
 )
+from traktor_m3u_sync.formats.m3u.writer import M3uTrack, playlist_file_path, write_m3u8
+from traktor_m3u_sync.formats.nml.reader import load_collection, read_playlists
+from traktor_m3u_sync.paths.traktor import PathTranslationError, TraktorPathMapping
+from traktor_m3u_sync.services import run_export, run_import
+from traktor_m3u_sync.store import PlaylistStore, StoreError, StoreNotPopulatedError
 
 RUNNER = CliRunner()
 
 
-def test_load_config_and_apply_export_overrides(tmp_path: Path) -> None:
-    config_path = tmp_path / "traktor-m3u-sync.toml"
-    config_path.write_text(
-        """
-[library]
-traktor_root = "C:/Music"
-m3u_root = "../music"
+# ── config ──────────────────────────────────────────────────────────────
 
-[export]
-collection_path = "/tmp/collection.nml"
-output_dir = "/tmp/playlists"
-""".strip(),
-        encoding="utf-8",
-    )
+
+def test_load_config_and_apply_export_overrides(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
 
     config = load_config(config_path)
     overridden = apply_export_overrides(
         config,
-        collection_path=Path("/override/collection.nml"),
-        output_dir=Path("/override/playlists"),
+        format="m3u",
+        store_path=tmp_path / "override.db",
+        output_dir=tmp_path / "override-out",
     )
 
     assert config.library.traktor_root == PureWindowsPath("C:/Music")
     assert config.library.m3u_root == PurePosixPath("../music")
-    assert overridden.export.collection_path == Path("/override/collection.nml")
-    assert overridden.export.output_dir == Path("/override/playlists")
+    assert overridden.store.path == tmp_path / "override.db"
+    assert overridden.m3u.output_dir == tmp_path / "override-out"
 
 
-def test_extract_playlist_nodes_skips_smartlists(tmp_path: Path) -> None:
+def test_apply_export_overrides_raises_without_output_dir(tmp_path: Path) -> None:
+    config = _app_config(tmp_path, output_dir=None)
+
+    with pytest.raises(ConfigError, match="output_dir is required"):
+        apply_export_overrides(config, format="m3u")
+
+
+# ── NML reader ──────────────────────────────────────────────────────────
+
+
+def test_read_playlists_skips_smartlists(tmp_path: Path) -> None:
     collection = load_collection(_write_collection_fixture(tmp_path))
+    mapping = TraktorPathMapping(_library_config())
 
-    playlists, warnings = extract_playlist_nodes(collection.nml)
+    extracted = read_playlists(collection.nml, mapping)
 
-    assert len(playlists) == 1
-    assert playlists[0].folder_parts == ("House",)
-    assert playlists[0].playlist_name == "My:Playlist"
-    assert len(playlists[0].tracks) == 1
-    assert warnings[0].code == "smartlist_skipped"
-    assert warnings[0].playlist == "House/Auto List"
-
-
-def test_translate_track_path_prefers_primarykey_and_supports_relative_root() -> None:
-    track = PlaylistTrackSource(
-        primarykey_path="C:/Music/House/track-one.mp3",
-        location_dir=":/Wrong/:Folder/",
-        location_file="wrong-track.mp3",
-        location_volume="D:",
-        title="Track One",
-        artist="Artist One",
-        duration_seconds=123,
-    )
-
-    translated = translate_track_path(
-        track,
-        library=_library_config(),
-    )
-
-    assert translated == "../music/House/track-one.mp3"
+    assert len(extracted.playlists) == 1
+    assert extracted.playlists[0].folder_path == ("House",)
+    assert extracted.playlists[0].name == "My:Playlist"
+    assert len(extracted.playlists[0].tracks) == 1
+    assert extracted.warnings[0].code == "smartlist_skipped"
+    assert extracted.warnings[0].playlist == "House/Auto List"
 
 
-def test_translate_track_path_falls_back_to_location() -> None:
-    track = PlaylistTrackSource(
-        primarykey_path=None,
-        location_dir=":/Music/:House/",
-        location_file="track-two.mp3",
-        location_volume="C:",
+# ── traktor path mapping ────────────────────────────────────────────────
+
+
+def test_entry_path_prefers_primarykey_and_renders_m3u_relative_root(tmp_path: Path) -> None:
+    collection = load_collection(_write_collection_fixture(tmp_path))
+    mapping = TraktorPathMapping(_library_config())
+    entry = _first_playlist_entry(collection)
+
+    raw_path = mapping.entry_path(entry)
+
+    assert raw_path == "C:/Music/House/track-one.mp3"
+    assert mapping.render_for_m3u(mapping.to_rel_path(raw_path)) == "../music/House/track-one.mp3"
+
+
+def test_entry_path_falls_back_to_location() -> None:
+    entry = Entrytype(
         title="Track Two",
         artist="Artist Two",
-        duration_seconds=234,
+        location=Locationtype(volume="C:", dir=":/Music/:House/", file="track-two.mp3"),
+    )
+    mapping = TraktorPathMapping(_library_config())
+
+    raw_path = mapping.entry_path(entry)
+
+    assert raw_path == "C:/Music/House/track-two.mp3"
+    assert mapping.to_rel_path(raw_path) == "House/track-two.mp3"
+
+
+def test_entry_path_raises_when_neither_primarykey_nor_location() -> None:
+    entry = Entrytype(title="Track", artist="Artist")
+    mapping = TraktorPathMapping(_library_config())
+
+    with pytest.raises(PathTranslationError, match="missing both"):
+        mapping.entry_path(entry)
+
+
+def test_to_rel_path_raises_on_path_outside_root() -> None:
+    mapping = TraktorPathMapping(_library_config())
+
+    with pytest.raises(PathTranslationError, match="outside configured"):
+        mapping.to_rel_path("D:/Other/track.mp3")
+
+
+def test_render_for_m3u_with_absolute_m3u_root() -> None:
+    library = LibraryConfig(
+        traktor_root=PureWindowsPath("C:/Music"),
+        m3u_root=PurePosixPath("/absolute/music"),
     )
 
-    translated = translate_track_path(
-        track,
-        library=_library_config(),
+    result = TraktorPathMapping(library).render_for_m3u("House/track-one.mp3")
+
+    assert result == "/absolute/music/House/track-one.mp3"
+
+
+# ── two-command flow ────────────────────────────────────────────────────
+
+
+def test_import_then_export_writes_hierarchy_sanitizes_names_and_warns(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, _write_collection_fixture(tmp_path))
+
+    imported = RUNNER.invoke(app, ["import", "--format", "nml", "--config", str(config_path)])
+    exported = RUNNER.invoke(
+        app, ["export", "--format", "m3u", "--config", str(config_path)], catch_exceptions=False
     )
 
-    assert translated == "../music/House/track-two.mp3"
-
-
-def test_run_export_writes_hierarchy_sanitizes_names_and_emits_warnings(tmp_path: Path) -> None:
-    collection_path = _write_collection_fixture(tmp_path)
-    output_dir = tmp_path / "playlists"
-    config_path = tmp_path / "traktor-m3u-sync.toml"
-    config_path.write_text(
-        f"""
-[library]
-traktor_root = "C:/Music"
-m3u_root = "../music"
-
-[export]
-collection_path = "{collection_path}"
-output_dir = "{output_dir}"
-""".strip(),
-        encoding="utf-8",
-    )
-
-    result = run_export(load_config(config_path))
-
-    exported_playlist = output_dir / "House" / "My_Playlist.m3u8"
+    assert imported.exit_code == 0
+    assert 'WARNING code=smartlist_skipped playlist="House/Auto List"' in imported.stderr
+    assert exported.exit_code == 0
+    exported_playlist = tmp_path / "out" / "House" / "My_Playlist.m3u8"
     assert exported_playlist.exists()
     assert exported_playlist.read_text(encoding="utf-8") == "\n".join(
         [
@@ -128,33 +151,68 @@ output_dir = "{output_dir}"
             "",
         ]
     )
-    assert result.summary.playlists_written == 1
-    assert result.summary.tracks_exported == 1
-    assert result.summary.warnings_emitted == 1
-    assert result.warnings[0].code == "smartlist_skipped"
+    assert "SUMMARY playlists_written=1 tracks_exported=1 warnings_emitted=0" in exported.stdout
+
+
+def test_service_level_two_command_flow(tmp_path: Path) -> None:
+    config = load_config(_write_config(tmp_path, _write_collection_fixture(tmp_path)))
+
+    imported = run_import(config, "nml")
+    exported = run_export(config, "m3u")
+
+    assert imported.counts == {
+        "playlists_imported": 1,
+        "tracks_stored": 1,
+        "tracks_skipped": 0,
+        "warnings_emitted": 1,
+    }
+    assert exported.counts["playlists_written"] == 1
+    assert exported.counts["tracks_exported"] == 1
+    assert imported.warnings[0].code == "smartlist_skipped"
+    assert exported.warnings == ()
 
 
 def test_export_cli_emits_structured_summary(tmp_path: Path) -> None:
-    collection_path = _write_collection_fixture(tmp_path)
-    output_dir = tmp_path / "playlists"
-    config_path = tmp_path / "traktor-m3u-sync.toml"
-    config_path.write_text(
-        f"""
-[library]
-traktor_root = "C:/Music"
-m3u_root = "../music"
+    config_path = _write_config(tmp_path, _write_collection_fixture(tmp_path))
 
-[export]
-collection_path = "{collection_path}"
-output_dir = "{output_dir}"
-""".strip(),
-        encoding="utf-8",
-    )
-
-    result = RUNNER.invoke(app, ["export", "--config", str(config_path)])
+    RUNNER.invoke(app, ["import", "--format", "nml", "--config", str(config_path)])
+    result = RUNNER.invoke(app, ["export", "--format", "m3u", "--config", str(config_path)])
 
     assert result.exit_code == 0
-    assert "SUMMARY playlists_written=1 tracks_exported=1 warnings_emitted=1" in result.stdout
+    assert "SUMMARY playlists_written=1 tracks_exported=1 warnings_emitted=0" in result.stdout
+
+
+def test_export_cli_fails_fast_on_empty_store(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+
+    result = RUNNER.invoke(app, ["export", "--format", "m3u", "--config", str(config_path)])
+
+    assert result.exit_code == 1
+    assert "ERROR code=export_failed" in result.stderr
+    assert "run import first" in result.stderr
+
+
+def test_export_fails_fast_before_touching_output_dir(tmp_path: Path) -> None:
+    config = load_config(_write_config(tmp_path))
+
+    with pytest.raises(StoreNotPopulatedError, match="run import first"):
+        run_export(config, "m3u")
+
+    assert list((tmp_path / "out").iterdir()) == []
+
+
+def test_unknown_export_format_is_rejected(tmp_path: Path) -> None:
+    config = load_config(_write_config(tmp_path))
+
+    with pytest.raises(ValueError, match="Unsupported format 'flac' for export"):
+        run_export(config, "flac")
+
+
+def test_unknown_import_format_is_rejected(tmp_path: Path) -> None:
+    config = load_config(_write_config(tmp_path))
+
+    with pytest.raises(ValueError, match="Unsupported format 'flac' for import"):
+        run_import(config, "flac")
 
 
 # ── config error tests ──────────────────────────────────────────────────
@@ -168,7 +226,7 @@ def test_load_config_raises_on_missing_file(tmp_path: Path) -> None:
 def test_load_config_raises_on_missing_library_table(tmp_path: Path) -> None:
     config_path = tmp_path / "bad.toml"
     config_path.write_text(
-        '[export]\ncollection_path = "/tmp/n"\noutput_dir = "/tmp/o"\n',
+        '[store]\npath = "/tmp/s.db"\n[nml]\ncollection_path = "/tmp/n"\n[m3u]\n',
         encoding="utf-8",
     )
 
@@ -179,8 +237,8 @@ def test_load_config_raises_on_missing_library_table(tmp_path: Path) -> None:
 def test_load_config_raises_on_missing_required_field(tmp_path: Path) -> None:
     config_path = tmp_path / "bad.toml"
     config_path.write_text(
-        '[library]\nm3u_root = "../music"\n\n'
-        '[export]\ncollection_path = "/tmp/n"\noutput_dir = "/tmp/o"\n',
+        '[library]\nm3u_root = "../music"\n\n[store]\npath = "/tmp/s.db"\n'
+        '[nml]\ncollection_path = "/tmp/n"\n[m3u]\n',
         encoding="utf-8",
     )
 
@@ -188,57 +246,16 @@ def test_load_config_raises_on_missing_required_field(tmp_path: Path) -> None:
         load_config(config_path)
 
 
-# ── path translation error tests ────────────────────────────────────────
-
-
-def test_translate_track_path_raises_on_path_outside_root() -> None:
-    track = PlaylistTrackSource(
-        primarykey_path="D:/Other/track.mp3",
-        location_dir=None,
-        location_file=None,
-        location_volume=None,
-        title="Track",
-        artist="Artist",
-        duration_seconds=100,
+def test_load_config_raises_on_missing_format_table(tmp_path: Path) -> None:
+    config_path = tmp_path / "bad.toml"
+    config_path.write_text(
+        '[library]\ntraktor_root = "C:/Music"\nm3u_root = "../music"\n\n'
+        '[store]\npath = "/tmp/s.db"\n[nml]\ncollection_path = "/tmp/n"\n',
+        encoding="utf-8",
     )
 
-    with pytest.raises(PathTranslationError, match="outside configured"):
-        translate_track_path(track, library=_library_config())
-
-
-def test_translate_track_path_raises_when_neither_primarykey_nor_location() -> None:
-    track = PlaylistTrackSource(
-        primarykey_path=None,
-        location_dir=None,
-        location_file=None,
-        location_volume=None,
-        title="Track",
-        artist="Artist",
-        duration_seconds=100,
-    )
-
-    with pytest.raises(PathTranslationError, match="missing both"):
-        translate_track_path(track, library=_library_config())
-
-
-def test_translate_track_path_with_absolute_m3u_root() -> None:
-    track = PlaylistTrackSource(
-        primarykey_path="C:/Music/House/track-one.mp3",
-        location_dir=None,
-        location_file=None,
-        location_volume=None,
-        title="Track",
-        artist="Artist",
-        duration_seconds=100,
-    )
-    library = LibraryConfig(
-        traktor_root=PureWindowsPath("C:/Music"),
-        m3u_root=PurePosixPath("/absolute/music"),
-    )
-
-    result = translate_track_path(track, library=library)
-
-    assert result == "/absolute/music/House/track-one.mp3"
+    with pytest.raises(ConfigError, match=r"Missing required \[m3u\] table"):
+        load_config(config_path)
 
 
 # ── m3u writer edge cases ───────────────────────────────────────────────
@@ -247,12 +264,7 @@ def test_translate_track_path_with_absolute_m3u_root() -> None:
 def test_write_m3u8_with_missing_duration(tmp_path: Path) -> None:
     output = tmp_path / "test.m3u8"
     tracks = [
-        ExportTrack(
-            path="../music/track.mp3",
-            title="Track",
-            artist="Artist",
-            duration_seconds=None,
-        )
+        M3uTrack(path="../music/track.mp3", title="Track", artist="Artist", duration_seconds=None)
     ]
 
     write_m3u8(output, tracks)
@@ -260,114 +272,262 @@ def test_write_m3u8_with_missing_duration(tmp_path: Path) -> None:
     assert "#EXTINF:-1,Artist - Track" in output.read_text(encoding="utf-8")
 
 
+def test_playlist_file_path_omits_root_and_sanitizes(tmp_path: Path) -> None:
+    result = playlist_file_path(tmp_path, ("House", "Deep?One"), "Mix:Two")
+
+    assert result == tmp_path / "House" / "Deep_One" / "Mix_Two.m3u8"
+
+
 # ── CLI error handling ──────────────────────────────────────────────────
 
 
 def test_export_cli_exits_nonzero_on_missing_config(tmp_path: Path) -> None:
-    result = RUNNER.invoke(app, ["export", "--config", str(tmp_path / "nonexistent.toml")])
+    result = RUNNER.invoke(
+        app, ["export", "--format", "m3u", "--config", str(tmp_path / "nonexistent.toml")]
+    )
 
     assert result.exit_code == 1
     assert "ERROR code=config_error" in result.stderr
 
 
+def test_import_cli_exits_nonzero_on_unreadable_collection(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    config_path.write_text(
+        _config_text(tmp_path).replace(str(tmp_path / "collection.nml"), str(tmp_path / "no.nml")),
+        encoding="utf-8",
+    )
+
+    result = RUNNER.invoke(app, ["import", "--format", "nml", "--config", str(config_path)])
+
+    assert result.exit_code == 1
+    assert "ERROR code=import_failed" in result.stderr
+
+
 # ── multi-playlist and sanitization ──────────────────────────────────────
 
 
-def test_run_export_writes_multiple_playlists_in_nested_folders(tmp_path: Path) -> None:
-    collection_path = _write_multi_playlist_fixture(tmp_path)
-    output_dir = tmp_path / "playlists"
-    config_path = tmp_path / "config.toml"
-    config_path.write_text(
-        f"""
-[library]
-traktor_root = "C:/Music"
-m3u_root = "../music"
+def test_two_command_flow_writes_multiple_playlists_in_nested_folders(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, collection=_write_multi_playlist_fixture(tmp_path))
 
-[export]
-collection_path = "{collection_path}"
-output_dir = "{output_dir}"
-""".strip(),
-        encoding="utf-8",
-    )
+    run_import(load_config(config_path), "nml")
+    result = run_export(load_config(config_path), "m3u")
 
-    result = run_export(load_config(config_path))
-
-    assert result.summary.playlists_written == 2
-    assert result.summary.tracks_exported == 2
-    assert (output_dir / "House" / "Deep.m3u8").exists()
-    assert (output_dir / "Techno" / "Rave.m3u8").exists()
+    assert result.counts["playlists_written"] == 2
+    assert result.counts["tracks_exported"] == 2
+    assert (tmp_path / "out" / "House" / "Deep.m3u8").exists()
+    assert (tmp_path / "out" / "Techno" / "Rave.m3u8").exists()
 
 
-def test_run_export_sanitizes_folder_names(tmp_path: Path) -> None:
-    collection_path = _write_bad_folder_fixture(tmp_path)
-    output_dir = tmp_path / "playlists"
-    config_path = tmp_path / "config.toml"
-    config_path.write_text(
-        f"""
-[library]
-traktor_root = "C:/Music"
-m3u_root = "../music"
+def test_two_command_flow_sanitizes_folder_names(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, collection=_write_bad_folder_fixture(tmp_path))
 
-[export]
-collection_path = "{collection_path}"
-output_dir = "{output_dir}"
-""".strip(),
-        encoding="utf-8",
-    )
+    run_import(load_config(config_path), "nml")
+    result = run_export(load_config(config_path), "m3u")
 
-    result = run_export(load_config(config_path))
-
-    assert result.summary.playlists_written == 1
-    assert (output_dir / "Bad_Folder" / "Mix.m3u8").exists()
+    assert result.counts["playlists_written"] == 1
+    assert (tmp_path / "out" / "Bad_Folder" / "Mix.m3u8").exists()
 
 
-def test_run_export_handles_empty_playlist(tmp_path: Path) -> None:
-    collection_path = _write_empty_playlist_fixture(tmp_path)
-    output_dir = tmp_path / "playlists"
-    config_path = tmp_path / "config.toml"
-    config_path.write_text(
-        f"""
-[library]
-traktor_root = "C:/Music"
-m3u_root = "../music"
+def test_two_command_flow_handles_empty_playlist(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, collection=_write_empty_playlist_fixture(tmp_path))
 
-[export]
-collection_path = "{collection_path}"
-output_dir = "{output_dir}"
-""".strip(),
-        encoding="utf-8",
-    )
+    run_import(load_config(config_path), "nml")
+    result = run_export(load_config(config_path), "m3u")
 
-    result = run_export(load_config(config_path))
-
-    assert result.summary.playlists_written == 1
-    assert result.summary.tracks_exported == 0
-    assert (output_dir / "Empty.m3u8").read_text(encoding="utf-8").strip() == "#EXTM3U"
+    assert result.counts["playlists_written"] == 1
+    assert result.counts["tracks_exported"] == 0
+    assert (tmp_path / "out" / "Empty.m3u8").read_text(encoding="utf-8").strip() == "#EXTM3U"
 
 
-def test_run_export_warns_on_path_outside_root_and_continues(tmp_path: Path) -> None:
-    collection_path = _write_outside_root_fixture(tmp_path)
-    output_dir = tmp_path / "playlists"
-    config_path = tmp_path / "config.toml"
-    config_path.write_text(
-        f"""
-[library]
-traktor_root = "C:/Music"
-m3u_root = "../music"
+def test_two_command_flow_warns_on_path_outside_root_and_continues(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, collection=_write_outside_root_fixture(tmp_path))
 
-[export]
-collection_path = "{collection_path}"
-output_dir = "{output_dir}"
-""".strip(),
-        encoding="utf-8",
-    )
+    imported = run_import(load_config(config_path), "nml")
+    result = run_export(load_config(config_path), "m3u")
 
-    result = run_export(load_config(config_path))
-
-    assert result.summary.playlists_written == 1
-    assert result.summary.tracks_exported == 1
-    path_warnings = [w for w in result.warnings if w.code == "path_translation_failed"]
+    path_warnings = [w for w in imported.warnings if w.code == "path_translation_failed"]
     assert len(path_warnings) == 1
+    assert result.counts["playlists_written"] == 1
+    assert result.counts["tracks_exported"] == 1
+
+
+def test_two_command_flow_skips_unresolved_tracks_on_export(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, collection=_write_outside_root_fixture(tmp_path))
+
+    run_import(load_config(config_path), "nml")
+    result = run_export(load_config(config_path), "m3u")
+
+    unresolved = [w for w in result.warnings if w.code == "track_unresolved"]
+    assert len(unresolved) == 1
+    assert unresolved[0].playlist == "Mixed"
+
+
+def test_wholesale_rebuild_replaces_previous_store_content(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, collection=_write_multi_playlist_fixture(tmp_path))
+    config = load_config(config_path)
+
+    run_import(config, "nml")
+    run_import(config, "nml")
+
+    with PlaylistStore(config.store.path) as store:
+        playlists = store.load_playlists()
+
+    assert len(playlists) == 2
+
+
+# ── atomic publication ───────────────────────────────────────────────────
+
+
+def test_m3u_export_replaces_existing_target_without_temp_leftovers(tmp_path: Path) -> None:
+    config = load_config(_write_config(tmp_path, _write_collection_fixture(tmp_path)))
+    run_import(config, "nml")
+    target = tmp_path / "out" / "House" / "My_Playlist.m3u8"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("stale\n", encoding="utf-8")
+
+    run_export(config, "m3u")
+
+    assert target.read_text(encoding="utf-8").startswith("#EXTM3U")
+    assert [p.name for p in target.parent.iterdir()] == ["My_Playlist.m3u8"]
+
+
+def test_m3u_write_failure_leaves_existing_target_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = load_config(_write_config(tmp_path, _write_collection_fixture(tmp_path)))
+    run_import(config, "nml")
+    target = tmp_path / "out" / "House" / "My_Playlist.m3u8"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("stale\n", encoding="utf-8")
+
+    def failing_replace(src: object, dst: object) -> None:
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr("os.replace", failing_replace)
+
+    with pytest.raises(OSError, match="no space"):
+        run_export(config, "m3u")
+
+    assert target.read_text(encoding="utf-8") == "stale\n"
+    assert [p.name for p in target.parent.iterdir()] == ["My_Playlist.m3u8"]
+
+
+# ── export dry run ───────────────────────────────────────────────────────
+
+
+def test_m3u_dry_run_matches_real_export_without_writing_target(tmp_path: Path) -> None:
+    config = load_config(_write_config(tmp_path, _write_collection_fixture(tmp_path)))
+    run_import(config, "nml")
+
+    dry = run_export(config, "m3u", dry_run=True)
+
+    assert list((tmp_path / "out").iterdir()) == []
+
+    real = run_export(config, "m3u")
+    assert dry.counts == real.counts
+    assert dry.warnings == real.warnings
+
+
+def test_export_cli_dry_run_preserves_summary_store_and_target(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, _write_collection_fixture(tmp_path))
+    RUNNER.invoke(app, ["import", "--format", "nml", "--config", str(config_path)])
+    store_bytes = (tmp_path / "store.db").read_bytes()
+
+    dry = RUNNER.invoke(
+        app, ["export", "--format", "m3u", "--dry-run", "--config", str(config_path)]
+    )
+
+    assert dry.exit_code == 0
+    assert (tmp_path / "store.db").read_bytes() == store_bytes
+    assert list((tmp_path / "out").iterdir()) == []
+
+    real = RUNNER.invoke(app, ["export", "--format", "m3u", "--config", str(config_path)])
+    assert dry.stdout == real.stdout
+    assert (tmp_path / "out" / "House" / "My_Playlist.m3u8").exists()
+
+
+def test_export_dry_run_absent_store_creates_nothing(tmp_path: Path) -> None:
+    config = AppConfig(
+        library=_library_config(),
+        store=StoreConfig(path=tmp_path / "nested" / "store.db"),
+        nml=NmlConfig(collection_path=tmp_path / "collection.nml"),
+        m3u=M3uConfig(output_dir=tmp_path / "out", import_dir=tmp_path / "in"),
+    )
+
+    with pytest.raises(StoreError, match="not found for read-only access"):
+        run_export(config, "m3u", dry_run=True)
+
+    assert not (tmp_path / "nested").exists()
+    assert not (tmp_path / "out").exists()
+
+
+def test_export_dry_run_does_not_initialize_existing_empty_store(tmp_path: Path) -> None:
+    config = _app_config(tmp_path, output_dir=tmp_path / "out")
+    config.store.path.touch()
+
+    with pytest.raises(StoreError, match="not an initialized store"):
+        run_export(config, "m3u", dry_run=True)
+
+    assert config.store.path.stat().st_size == 0
+
+
+def test_export_cli_dry_run_absent_store_fails_without_creating_it(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+
+    result = RUNNER.invoke(
+        app, ["export", "--format", "m3u", "--dry-run", "--config", str(config_path)]
+    )
+
+    assert result.exit_code == 1
+    assert "ERROR code=export_failed" in result.stderr
+    assert not (tmp_path / "store.db").exists()
+
+
+# ── warning-sensitive exit status ────────────────────────────────────────
+
+
+def test_import_cli_fail_on_warning_exits_2_after_warnings(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, _write_collection_fixture(tmp_path))
+
+    result = RUNNER.invoke(
+        app, ["import", "--format", "nml", "--config", str(config_path), "--fail-on-warning"]
+    )
+
+    assert result.exit_code == 2
+    assert 'WARNING code=smartlist_skipped playlist="House/Auto List"' in result.stderr
+    assert "SUMMARY" in result.stdout
+
+
+def test_export_cli_fail_on_warning_status_2_strict_and_0_by_default(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, _write_outside_root_fixture(tmp_path))
+    RUNNER.invoke(app, ["import", "--format", "nml", "--config", str(config_path)])
+
+    strict = RUNNER.invoke(
+        app, ["export", "--format", "m3u", "--config", str(config_path), "--fail-on-warning"]
+    )
+    default = RUNNER.invoke(app, ["export", "--format", "m3u", "--config", str(config_path)])
+
+    assert strict.exit_code == 2
+    assert "WARNING code=track_unresolved" in strict.stderr
+    assert "SUMMARY" in strict.stdout
+    assert default.exit_code == 0
+
+
+def test_cli_real_failure_stays_exit_1_even_with_fail_on_warning(tmp_path: Path) -> None:
+    result = RUNNER.invoke(
+        app,
+        [
+            "export",
+            "--format",
+            "m3u",
+            "--config",
+            str(tmp_path / "nonexistent.toml"),
+            "--fail-on-warning",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "ERROR code=config_error" in result.stderr
 
 
 # ── helpers ─────────────────────────────────────────────────────────────
@@ -380,6 +540,47 @@ def _library_config() -> LibraryConfig:
     )
 
 
+def _app_config(tmp_path: Path, *, output_dir: Path | None = None) -> AppConfig:
+    return AppConfig(
+        library=_library_config(),
+        store=StoreConfig(path=tmp_path / "store.db"),
+        nml=NmlConfig(collection_path=tmp_path / "collection.nml"),
+        m3u=M3uConfig(output_dir=output_dir, import_dir=tmp_path / "in"),
+    )
+
+
+def _config_text(tmp_path: Path, collection: Path | None = None) -> str:
+    return (
+        f'[library]\ntraktor_root = "C:/Music"\nm3u_root = "../music"\n\n'
+        f'[store]\npath = "{tmp_path / "store.db"}"\n\n'
+        f'[nml]\ncollection_path = "{collection or tmp_path / "collection.nml"}"\n\n'
+        f'[m3u]\noutput_dir = "{tmp_path / "out"}"\nimport_dir = "{tmp_path / "in"}"\n'
+    )
+
+
+def _write_config(tmp_path: Path, collection: Path | None = None) -> Path:
+    _make_dirs(tmp_path)
+    path = tmp_path / "traktor-m3u-sync.toml"
+    path.write_text(_config_text(tmp_path, collection), encoding="utf-8")
+    return path
+
+
+def _make_dirs(tmp_path: Path) -> None:
+    (tmp_path / "out").mkdir(exist_ok=True)
+    (tmp_path / "in").mkdir(exist_ok=True)
+
+
+def _first_playlist_entry(collection: TraktorCollection) -> Entrytype:
+    playlists = collection.nml.playlists
+    assert playlists is not None and playlists.node is not None
+    assert playlists.node.subnodes is not None
+    house = playlists.node.subnodes.node[0]
+    assert house.subnodes is not None
+    playlist = house.subnodes.node[0]
+    assert playlist.playlist is not None
+    return playlist.playlist.entry[0]
+
+
 def _write_collection_fixture(tmp_path: Path) -> Path:
     collection_path = tmp_path / "collection.nml"
     collection_path.write_text(
@@ -389,7 +590,7 @@ def _write_collection_fixture(tmp_path: Path) -> Path:
   <COLLECTION ENTRIES="1">
     <ENTRY TITLE="Track One" ARTIST="Artist One">
       <LOCATION VOLUME="C:" DIR=":/Music/:House/" FILE="track-one.mp3"></LOCATION>
-      <INFO PLAYTIME="123"></INFO>
+      <INFO PLAYTIME="123000"></INFO>
       <PRIMARYKEY TYPE="TRACK" KEY="C:/Music/House/track-one.mp3"></PRIMARYKEY>
     </ENTRY>
   </COLLECTION>
@@ -402,7 +603,7 @@ def _write_collection_fixture(tmp_path: Path) -> Path:
               <PLAYLIST ENTRIES="1" TYPE="LIST">
                 <ENTRY TITLE="Track One" ARTIST="Artist One">
                   <LOCATION VOLUME="C:" DIR=":/Music/:House/" FILE="track-one.mp3"></LOCATION>
-                  <INFO PLAYTIME="123"></INFO>
+                  <INFO PLAYTIME="123000"></INFO>
                   <PRIMARYKEY TYPE="TRACK" KEY="C:/Music/House/track-one.mp3"></PRIMARYKEY>
                 </ENTRY>
               </PLAYLIST>
@@ -431,12 +632,12 @@ def _write_multi_playlist_fixture(tmp_path: Path) -> Path:
   <COLLECTION ENTRIES="2">
     <ENTRY TITLE="Track A" ARTIST="Artist A">
       <LOCATION VOLUME="C:" DIR=":/Music/:House/" FILE="track-a.mp3"></LOCATION>
-      <INFO PLAYTIME="100"></INFO>
+      <INFO PLAYTIME="100000"></INFO>
       <PRIMARYKEY TYPE="TRACK" KEY="C:/Music/House/track-a.mp3"></PRIMARYKEY>
     </ENTRY>
     <ENTRY TITLE="Track B" ARTIST="Artist B">
       <LOCATION VOLUME="C:" DIR=":/Music/:Techno/" FILE="track-b.mp3"></LOCATION>
-      <INFO PLAYTIME="200"></INFO>
+      <INFO PLAYTIME="200000"></INFO>
       <PRIMARYKEY TYPE="TRACK" KEY="C:/Music/Techno/track-b.mp3"></PRIMARYKEY>
     </ENTRY>
   </COLLECTION>
@@ -484,7 +685,7 @@ def _write_bad_folder_fixture(tmp_path: Path) -> Path:
   <COLLECTION ENTRIES="1">
     <ENTRY TITLE="Track One" ARTIST="Artist One">
       <LOCATION VOLUME="C:" DIR=":/Music/:House/" FILE="track.mp3"></LOCATION>
-      <INFO PLAYTIME="100"></INFO>
+      <INFO PLAYTIME="100000"></INFO>
       <PRIMARYKEY TYPE="TRACK" KEY="C:/Music/House/track.mp3"></PRIMARYKEY>
     </ENTRY>
   </COLLECTION>
@@ -546,12 +747,12 @@ def _write_outside_root_fixture(tmp_path: Path) -> Path:
   <COLLECTION ENTRIES="2">
     <ENTRY TITLE="Good Track" ARTIST="Artist">
       <LOCATION VOLUME="C:" DIR=":/Music/:House/" FILE="good.mp3"></LOCATION>
-      <INFO PLAYTIME="100"></INFO>
+      <INFO PLAYTIME="100000"></INFO>
       <PRIMARYKEY TYPE="TRACK" KEY="C:/Music/House/good.mp3"></PRIMARYKEY>
     </ENTRY>
     <ENTRY TITLE="Bad Track" ARTIST="Artist">
       <LOCATION VOLUME="D:" DIR=":/Other/:Dir/" FILE="bad.mp3"></LOCATION>
-      <INFO PLAYTIME="200"></INFO>
+      <INFO PLAYTIME="200000"></INFO>
       <PRIMARYKEY TYPE="TRACK" KEY="D:/Other/Dir/bad.mp3"></PRIMARYKEY>
     </ENTRY>
   </COLLECTION>

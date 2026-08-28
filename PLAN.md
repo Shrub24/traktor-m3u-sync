@@ -2,7 +2,9 @@
 
 ## Current focus
 
-**Phases 0–2 are complete.** The repo has a working Nix-first Python 3.14 environment, NML→M3U8 export, and M3U8→NML sandbox import.
+**Phases 0–2 are complete.** The repo has a working Nix-first Python 3.14 environment and store-mediated NML/M3U adapters.
+
+**Active: `itunes-export` — the first new target adapter.** The project is no longer a Traktor↔M3U point-to-point tool: an internal playlist model and rebuildable SQLite store are the hub; NML and M3U are adapters behind store-mediated `import --format <fmt>` / `export --format <fmt>` commands. iTunes XML is now an export target; Engine DJ remains deferred.
 
 Next up: **Phase 3 — Refinement and operational polish**.
 
@@ -57,6 +59,12 @@ Sub-areas:
 **Completed OpenSpec changes:**
 - `deployment-packaging` — Nix runtime package, app output, NixOS module with declarative config and separate export/import services
 
+**Completed OpenSpec changes:**
+- `playlist-store` — hub-and-spoke pivot: internal model, SQLite store, adapter contract, format-based config, store-mediated CLI (see ARCHITECTURE.md)
+
+**In-progress OpenSpec changes:**
+- `itunes-export` — store-to-iTunes XML exporter, including NixOS export service support
+
 **Planned OpenSpec changes:** `sync-config`, `sync-reporting` (split as needed)
 
 Sub-areas:
@@ -76,6 +84,7 @@ These are explicitly out of scope until Phases 1–3 prove the core loop:
 - Cue point / analysis metadata in custom M3U tags
 - Watch mode (inotify / systemd path units)
 - Cross-platform import targets (macOS)
+- Additional format adapters unlocked by `playlist-store`: Engine DJ, rekordbox
 
 ## Working assumptions
 
@@ -85,6 +94,7 @@ These are explicitly out of scope until Phases 1–3 prove the core loop:
 - Smartlists are out of scope for import; export of smartlists deferred until Phase 4+.
 - `traktor-nml-utils` (v4.0.0+) is the primary NML parsing library. If xsdata write round-tripping proves fragile, fall back to direct `lxml` writes using the same models as reference.
 - TOML is the config format.
+- The SQLite store is a rebuildable cache, never a source of truth; any format can repopulate it.
 - Package: `traktor_m3u_sync`, CLI: `traktor-m3u-sync`.
 
 ## Change discipline

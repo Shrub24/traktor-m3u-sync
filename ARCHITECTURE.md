@@ -2,67 +2,47 @@
 
 ## Purpose
 
-`traktor-m3u-sync` is intended to become a Nix-first Python CLI worker for synchronizing Traktor playlist state with UTF-8 `.m3u8` playlists.
+`traktor-m3u-sync` is a Nix-first Python CLI worker that bridges playlist libraries through a multi-format pipeline. Traktor `collection.nml` and UTF-8 `.m3u8` are import/export modalities; iTunes XML is an export modality; Engine DJ remains deferred.
 
-The long-term target is bidirectional synchronization between:
+## Architecture: store-mediated multi-format bridge
 
-- Traktor `collection.nml`
-- exported/imported `.m3u8` playlists
+The system is a hub-and-spoke bridge. The hub is a format-neutral playlist model plus a local SQLite store; each format is a pair of adapter modules that only translates between its native representation and the hub. Import and export are independent processes that communicate through the store.
 
-Navidrome-facing automation may consume the generated playlists later, but that integration is outside this repository's first bootstrap phase.
+1. **Model (`model/`)** — frozen playlist/track dataclasses with identity normalization: a track's identity is its casefolded POSIX library-relative path, with an artist+title fallback only for entries that have no resolvable path (ambiguous fallbacks warn; unresolvable entries are stored flagged, never dropped).
+2. **Store (`store/`)** — SQLite (stdlib `sqlite3`) cache at `[store].path`. Rebuildable, disposable state: every import performs a wholesale wipe-and-rebuild in one transaction. A `meta` table carries the schema version; mismatches fail fast with a re-import directive — there are no migrations.
+3. **Format adapters (`formats/<fmt>/`)** — per format, an `Importer` (`read(source) -> ImportResult`) and/or `Exporter` (`write(playlists, target) -> ExportResult`) plus format-internal helpers. Adapters emit shared structured warning/result types and hold no cross-format knowledge.
+4. **Paths (`paths/`)** — path-bearing formats use a `PathMapping` to translate native forms (Traktor `VOLUME`/`DIR`/`FILE`/`PRIMARYKEY`, M3U relative/absolute) to and from library-relative identity space.
+5. **Services (`services/`)** — thin orchestration only: resolve config, select the format's adapter, run it, rebuild or read the store, summarize. Format selection is a registry lookup.
+6. **CLI (`cli.py`)** — `import --format nml|m3u` (source → store) and `export --format nml|m3u|itunes` (store → target). Export reads only the store and fails fast when it is empty or uninitialized.
 
-## High-level architecture direction
-
-The planned architecture is a small CLI-oriented application with clear subsystem boundaries:
-
-1. **Configuration layer**
-   - path mappings
-   - sync mode and sandbox settings
-   - filesystem and report output paths
-
-2. **NML domain layer**
-   - load and inspect Traktor playlist/tree state
-   - later support controlled sandbox import mutation
-
-3. **M3U domain layer**
-   - read and write UTF-8 `.m3u8` playlists
-   - preserve playlist ordering and exported directory hierarchy
-
-4. **Path translation layer**
-   - normalize Traktor Windows paths
-   - derive relative-path-based matching for import
-   - support configurable path mappings
-
-5. **Sync orchestration layer**
-   - export workflow: NML → M3U
-   - import workflow: M3U → NML sandbox rebuild
-   - conflict/reporting behavior at workflow boundaries
-
-6. **Reporting layer**
-   - import/export summaries
-   - unresolved track warnings
-   - durable sync reports/logs where needed
+Adding a format means one adapter package and any required path mapping or config section; no other format needs format-specific orchestration. iTunes XML export is implemented; Engine DJ is the next deferred modality.
 
 ## Confirmed architectural decisions
 
 - Python 3.14 is preferred.
 - Development and packaging are Nix-first.
 - CLI-first design; no GUI is planned.
-- Import behavior will begin with a sandbox overwrite model rather than fine-grained merge logic.
-- Track matching for early import work is based on filename plus relative path.
-- Missing import matches should be skipped and reported.
+- Command surface is store-mediated: `import --format <fmt>` rebuilds the store from a source; `export --format <fmt>` renders the store to a target and never reads sources directly.
+- The store is a rebuildable cache (schema versioned, wholesale rebuild per import, no migrations); external libraries remain the source of truth.
+- Track identity is the casefolded POSIX library-relative path; artist+title is a fallback-only identity with ambiguity warnings.
+- Traktor playlist import into NML keeps the sandbox overwrite model rather than fine-grained merge logic.
+- Missing import matches are skipped and reported.
 - Exported playlists use UTF-8 `.m3u8`.
-- TOML is the configuration format.
+- Durations are stored in seconds; adapters convert native units (Traktor `PLAYTIME` is milliseconds) at the boundary.
+- TOML is the configuration format, with format-based sections (`[library]`, `[store]`, `[nml]`, `[m3u]`, `[itunes]`) and per-command CLI overrides.
 - `traktor-nml-utils` (v4.0.0+) is the primary NML parsing library. It uses xsdata-generated dataclasses that model the full NML schema (entries, locations, cues, playlists, etc.). If xsdata write round-tripping proves fragile, fall back to direct `lxml` writes using the same models as reference.
 - The sync worker runs on Linux/NixOS; the Traktor import target is Windows-first.
 - Path mappings are configurable in design, even if the first deployment uses a fixed mapping.
 - The flake exposes a real runtime package (not just a dev shell) built with `buildPythonApplication` and `lib.cleanSource`.
 - A flake app output (`nix run .#default`) delegates to the packaged CLI binary.
 - `traktor-nml-utils` is packaged as a Nix derivation from PyPI since it is not in nixpkgs.
-- A NixOS module (`nixosModules.traktor-m3u-sync`) exposes separate oneshot `export` and `import` service surfaces with an overridable `package` option.
+- A NixOS module (`nixosModules.traktor-m3u-sync`) exposes separate format-generic oneshot `export` and `import` service surfaces with an overridable `package` option; export supports NML, M3U, and iTunes while import supports NML and M3U.
 - Declarative TOML config is rendered into the Nix store; services invoke the CLI with `--config` pointing at the store path.
 - An optional `configFile` override lets operators provide an externally managed TOML file instead of rendering from Nix options.
 - Orchestration policy (timers, path triggers, Syncthing hooks) is intentionally excluded from the base module — downstream consumers attach scheduling via standard NixOS mechanisms.
+- Generated M3U and iTunes targets are published atomically via a stdlib same-directory temporary file plus `os.replace`; a failed write leaves the prior target intact and removes the temporary file. NML keeps its backup/restore model instead.
+- `export --dry-run` rehearses every export format by running the real exporter against isolated temporary targets (temp dir, temp XML, temp copy of the collection); there is no import dry run and dry runs never touch the configured target or store.
+- `--fail-on-warning` is an opt-in strict mode for import and export: completed-with-warnings exits `2`, errors stay `1`, and the default (flag absent) keeps warnings at `0`.
 - The TOML config contract remains the primary CLI interface; the module's Nix-level options map 1:1 to the same TOML structure.
 - The repository license is GPL-3.0-or-later.
 

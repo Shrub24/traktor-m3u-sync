@@ -91,16 +91,50 @@
                           traktor_root = "/mnt/traktor";
                           m3u_root = "/mnt/music";
                         };
+                        store.path = "/var/lib/traktor-m3u-sync/store.db";
+                        nml = {
+                          collection_path = "/mnt/traktor/collection.nml";
+                          sandbox_name = "Imported Playlists";
+                        };
+                        m3u = {
+                          output_dir = "/mnt/playlists/export";
+                          import_dir = "/mnt/playlists/import";
+                        };
+                        itunes = {
+                          output_file = "/mnt/playlists/iTunes Music Library.xml";
+                          base_path = "/mnt/music";
+                        };
                         export = {
                           enable = true;
-                          collection_path = "/mnt/traktor/collection.nml";
-                          output_dir = "/mnt/playlists";
+                          format = "itunes";
                         };
                         import = {
                           enable = true;
-                          collection_path = "/mnt/traktor/collection.nml";
-                          import_dir = "/mnt/playlists";
-                          sandbox_name = "Imported Playlists";
+                          format = "nml";
+                        };
+                      };
+                    }
+                  ];
+                };
+
+                externalConfigEvaled = nixpkgs.lib.nixosSystem {
+                  inherit (pkgs) system;
+                  modules = [
+                    self.nixosModules.traktor-m3u-sync
+                    {
+                      services.traktor-m3u-sync = {
+                        enable = true;
+                        package = traktor-m3u-sync;
+                        configFile = "/etc/traktor-m3u-sync/config with % percent.toml";
+                        export = {
+                          enable = true;
+                          format = "m3u";
+                          extraArgs = [ "--fail-on-warning" ];
+                        };
+                        import = {
+                          enable = true;
+                          format = "m3u";
+                          extraArgs = [ "--fail-on-warning" ];
                         };
                       };
                     }
@@ -111,26 +145,76 @@
 
                 exportService = evaled.config.systemd.services.traktor-m3u-sync-export;
                 importService = evaled.config.systemd.services.traktor-m3u-sync-import;
+                externalExportService = externalConfigEvaled.config.systemd.services.traktor-m3u-sync-export;
+                externalImportService = externalConfigEvaled.config.systemd.services.traktor-m3u-sync-import;
 
                 # Smoke-test: verify the module option surface exists and
-                # evaluates without error, the service ExecStart lines
-                # contain the expected subcommands, and the generated TOML
-                # is a valid store path.
+                # evaluates without error, the service ExecStart lines pass
+                # their declared --format and --config, and the generated
+                # TOML parses with every section and field the CLI loader
+                # requires.
                 moduleSurfaceOk = cfg.enable == true;
-                exportExecOk = builtins.match ".*export.*--config.*" exportService.serviceConfig.ExecStart != null;
-                importExecOk = builtins.match ".*import.*--config.*" importService.serviceConfig.ExecStart != null;
+                exportExecOk =
+                  builtins.match ".*\"export\" \"--format\" \"itunes\" \"--config\" .*" exportService.serviceConfig.ExecStart
+                  != null;
+                importExecOk =
+                  builtins.match ".*\"import\" \"--format\" \"nml\" \"--config\" .*" importService.serviceConfig.ExecStart
+                  != null;
+                externalExportExecOk =
+                  builtins.match ".*\"export\" \"--format\" \"m3u\" \"--config\" \"/etc/traktor-m3u-sync/config with %% percent.toml\" \"--fail-on-warning\"" externalExportService.serviceConfig.ExecStart
+                  != null;
+                externalImportExecOk =
+                  builtins.match ".*\"import\" \"--format\" \"m3u\" \"--config\" \"/etc/traktor-m3u-sync/config with %% percent.toml\" \"--fail-on-warning\"" externalImportService.serviceConfig.ExecStart
+                  != null;
               in
-              pkgs.runCommand "module-eval-test" { } ''
+              pkgs.runCommand "module-eval-test" { nativeBuildInputs = [ python ]; } ''
                 set -e
 
                 echo "module-eval: checking option surface"
                 ${if moduleSurfaceOk then "" else "echo 'FAIL: enable option not true'; exit 1"}
 
                 echo "module-eval: checking export service ExecStart"
-                ${if exportExecOk then "" else "echo 'FAIL: export ExecStart missing expected pattern'; exit 1"}
+                ${if exportExecOk then "" else "echo 'FAIL: export ExecStart missing expected arguments'; exit 1"}
 
                 echo "module-eval: checking import service ExecStart"
                 ${if importExecOk then "" else "echo 'FAIL: import ExecStart missing expected pattern'; exit 1"}
+
+                echo "module-eval: checking external-config export ExecStart"
+                ${
+                  if externalExportExecOk then
+                    ""
+                  else
+                    "echo 'FAIL: export ExecStart lost config or extra argument boundaries'; exit 1"
+                }
+
+                echo "module-eval: checking external-config import ExecStart"
+                ${
+                  if externalImportExecOk then
+                    ""
+                  else
+                    "echo 'FAIL: import ExecStart lost config or extra argument boundaries'; exit 1"
+                }
+
+                echo "module-eval: checking rendered TOML against loader requirements"
+                config_file=$(echo '${importService.serviceConfig.ExecStart}' | sed 's/.*"--config" "\([^"]*\)".*/\1/')
+                python - "$config_file" <<'EOF'
+                import sys
+                import tomllib
+
+                with open(sys.argv[1], "rb") as fh:
+                    raw = tomllib.load(fh)
+
+                assert all(t in raw for t in ("library", "store", "nml", "m3u", "itunes")), raw
+                assert raw["library"]["traktor_root"] == "/mnt/traktor"
+                assert raw["library"]["m3u_root"] == "/mnt/music"
+                assert raw["store"]["path"] == "/var/lib/traktor-m3u-sync/store.db"
+                assert raw["nml"]["collection_path"] == "/mnt/traktor/collection.nml"
+                assert raw["nml"]["sandbox_name"] == "Imported Playlists"
+                assert raw["m3u"]["output_dir"] == "/mnt/playlists/export"
+                assert raw["m3u"]["import_dir"] == "/mnt/playlists/import"
+                assert raw["itunes"]["output_file"] == "/mnt/playlists/iTunes Music Library.xml"
+                assert raw["itunes"]["base_path"] == "/mnt/music"
+                EOF
 
                 echo "module-eval: all checks passed" > $out
               '';
@@ -162,11 +246,11 @@
             ];
 
             env = {
-              UV_PYTHON = "${pkgs.python314}/bin/python3.14";
+              # UV_PYTHON = "${pkgs.python314}/bin/python3.14";
             };
 
             shellHook = ''
-              echo "Loaded traktor-m3u-sync dev shell (${system})"
+              unset PYTHONPATH
             '';
           };
         };

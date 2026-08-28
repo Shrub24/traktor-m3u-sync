@@ -18,6 +18,13 @@ class Locationtype:
     dir: str | None
     file: str | None
     volume: str | None
+    def __init__(
+        self,
+        dir: str | None = None,
+        file: str | None = None,
+        volume: str | None = None,
+        volumeid: str | None = None,
+    ) -> None: ...
 
 class Entrytype:
     primarykey: Primarykeytype | None

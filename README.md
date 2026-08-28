@@ -1,16 +1,27 @@
 # traktor-m3u-sync
 
-CLI worker for bidirectional synchronization between Traktor Pro playlist collections (`collection.nml`) and standard UTF-8 `.m3u8` playlists.
+CLI worker for synchronizing Traktor Pro playlist collections (`collection.nml`) and standard
+UTF-8 `.m3u8` playlists through a local store, with additional export to iTunes XML for DJ software.
 
 ## Status
 
-**Phase 1 export and Phase 2 sandbox import available** — the repository can now export standard playlists from Traktor `collection.nml` into UTF-8 `.m3u8` files, and import `.m3u8` playlists back into a managed sandbox folder in `collection.nml`.
+**Store-mediated bridge** — every format talks to one internal playlist model through adapters:
+
+```
+collection.nml ──import──▶ SQLite store ──export──▶ .m3u8 / iTunes XML
+       .m3u8   ──import──▶            ◀──export──  collection.nml
+```
+
+`import` reads a whole source into the store (wholesale rebuild). `export` writes the store to a
+whole target and never reads another format. The store is a rebuildable cache: delete it and
+re-import at any time.
 
 Current limitations:
 
-- smartlists are skipped with warnings
+- smartlists are skipped with warnings during NML import
 - sanitized-name mismatch is a documented limitation (original names are not restored on import)
 - reporting is structured stdout/stderr only for now
+- no incremental sync; every import replaces the whole snapshot
 
 ## Quick start
 
@@ -25,34 +36,84 @@ just setup
 just check
 ```
 
-## Export configuration
+## Configuration
 
-Create a TOML config file such as `traktor-m3u-sync.toml`:
+Create a TOML config file such as `traktor-m3u-sync.toml`. Sections are per format, not per
+command direction:
 
 ```toml
 [library]
-traktor_root = "C:/Music"
-m3u_root = "../music"
+traktor_root = "C:/Music"          # Traktor's library root (Windows path format)
+m3u_root = "../music"              # M3U library root (absolute or relative)
 
-[export]
+[store]
+path = "~/.local/state/traktor-m3u-sync/store.db"   # optional, this is the default
+
+[nml]
 collection_path = "/path/to/collection.nml"
-output_dir = "/path/to/playlists"
+sandbox_name = "Imported Playlists"   # optional, this is the default
+
+[m3u]
+output_dir = "/path/to/playlists"     # required for `export --format m3u`
+import_dir = "/path/to/incoming"      # required for `import --format m3u`
+
+[itunes]
+output_file = "/path/to/iTunes Music Library.xml"  # required for `export --format itunes`
+base_path = "/path/to/music"                       # library root for track Locations, ditto
 ```
 
-Then run:
+## Commands
 
 ```bash
-traktor-m3u-sync export --config traktor-m3u-sync.toml
+# source -> store
+traktor-m3u-sync import --format nml --config traktor-m3u-sync.toml
+traktor-m3u-sync import --format m3u --config traktor-m3u-sync.toml
+
+# store -> target (fails fast if the store is empty: run an import first)
+traktor-m3u-sync export --format m3u --config traktor-m3u-sync.toml
+traktor-m3u-sync export --format nml --config traktor-m3u-sync.toml
+traktor-m3u-sync export --format itunes --config traktor-m3u-sync.toml
 ```
 
-You can override export workflow paths on the CLI:
+Per-command overrides:
 
 ```bash
-traktor-m3u-sync export \
+traktor-m3u-sync import --format m3u \
+  --config traktor-m3u-sync.toml \
+  --store /tmp/store.db \
+  --collection /path/to/collection.nml \
+  --import-dir /path/to/incoming
+
+traktor-m3u-sync export --format nml \
   --config traktor-m3u-sync.toml \
   --collection /path/to/collection.nml \
-  --output-dir /path/to/playlists
+  --sandbox-name "My Sandbox"
+
+traktor-m3u-sync export --format itunes \
+  --config traktor-m3u-sync.toml \
+  --output-file "/path/to/iTunes Music Library.xml" \
+  --base-path /path/to/music
 ```
+
+A store written by an older schema version is rejected with a structured error pointing at
+re-import; there are no migrations.
+
+## Operational flags
+
+- `export --dry-run` (all formats): validates config and store state, then runs the real
+  exporter against isolated temporary targets — a temporary directory (M3U), a temporary XML
+  file (iTunes), or a temporary copy of the collection (NML). Output, warnings, and the
+  summary are identical to a real run; the configured target, the NML collection, and the
+  store are left unchanged.
+- `--fail-on-warning` (import and export, opt-in): the command still prints its normal
+  summary and warnings, then exits `2` when at least one warning was emitted.
+
+Exit statuses: `0` success (including warnings by default), `1` any error, `2` completed
+with warnings under `--fail-on-warning`.
+
+M3U and iTunes generated targets are published atomically: each write goes to a same-directory
+temporary file and only replaces the target after serialization succeeds. A failed write leaves
+a prior target byte-for-byte unchanged and removes its temporary file.
 
 ## Deployment (Nix)
 
@@ -71,41 +132,16 @@ nix build .#packages.x86_64-linux.traktor-m3u-sync
 ### Run via `nix run`
 
 ```bash
-nix run .#default -- export --config traktor-m3u-sync.toml
-nix run .#default -- import --config traktor-m3u-sync.toml
+nix run .#default -- import --format nml --config traktor-m3u-sync.toml
+nix run .#default -- export --format m3u --config traktor-m3u-sync.toml
 ```
 
 ### NixOS module
 
 The flake exposes `nixosModules.traktor-m3u-sync` with declarative service
 configuration. The module renders a TOML config into the Nix store and runs
-separate oneshot `export` and `import` systemd services.
-
-```nix
-{
-  inputs.traktor-m3u-sync.url = "github:you/traktor-m3u-sync";
-
-  # ...
-  services.traktor-m3u-sync = {
-    enable = true;
-    library = {
-      traktor_root = "/mnt/traktor";
-      m3u_root = "/mnt/music";
-    };
-    export = {
-      enable = true;
-      collection_path = "/mnt/traktor/collection.nml";
-      output_dir = "/mnt/playlists";
-    };
-    import = {
-      enable = true;
-      collection_path = "/mnt/traktor/collection.nml";
-      import_dir = "/mnt/playlists";
-      sandbox_name = "Imported Playlists";
-    };
-  };
-}
-```
+separate oneshot `import` and `export` systemd services. See
+[docs/nix-deployment.md](docs/nix-deployment.md) for the option reference.
 
 #### Config override
 
@@ -116,21 +152,30 @@ from Nix options:
 services.traktor-m3u-sync = {
   enable = true;
   configFile = "/etc/traktor-m3u-sync/config.toml";
-  export.enable = true;
-  import.enable = true;
+  export = {
+    enable = true;
+    format = "m3u";
+  };
+  import = {
+    enable = true;
+    format = "nml";
+  };
 };
 ```
 
-When `configFile` is set, the module uses it directly. In that mode, the
-runtime workflow values come from the external TOML file rather than the
-corresponding Nix option blocks.
+When `configFile` is set, the module uses it directly and skips its
+generated-config assertions. The per-service `format` is still required —
+it is passed to the CLI as `--format`.
 
 #### Downstream orchestration
 
 Services are oneshot units with `wantedBy = []` by default — no timers, path
 triggers, or Syncthing hooks are bundled. Attach scheduling or filesystem
 triggers in your own NixOS config (e.g. `systemd.timers` or Syncthing folder
-watch hooks) as downstream orchestration policy.
+watch hooks) as downstream orchestration policy. The module adds no flags of
+its own; operators that want warning-sensitive oneshots override the service
+`ExecStart` downstream and append `--fail-on-warning` (see
+[docs/nix-deployment.md](docs/nix-deployment.md)).
 
 ## Commands
 
@@ -149,59 +194,42 @@ watch hooks) as downstream orchestration policy.
 | `just app-run`    | run the CLI via `nix run`                                  |
 | `just module-check` | evaluate the NixOS module with a minimal config          |
 
-## Export behavior
+## NML import behavior (`import --format nml`)
 
-- exports one UTF-8 `.m3u8` file per standard Traktor playlist
-- preserves playlist folder hierarchy while omitting `$ROOT`
+- reads every standard playlist from `collection.nml`, preserving folder hierarchy and `$ROOT` omission
 - prefers `PRIMARYKEY` for track paths and falls back to reconstructed `LOCATION`
+- stores track duration in seconds (Traktor's `PLAYTIME` milliseconds are converted at the adapter)
+- emits structured warnings for skipped smartlists and unmappable paths
+
+## M3U export behavior (`export --format m3u`)
+
+- writes one UTF-8 `.m3u8` file per playlist, mirroring the stored folder hierarchy
+- renders paths in M3U space from `[library].m3u_root`
 - minimally sanitizes filesystem-invalid playlist and folder names
-- emits structured warnings for skipped smartlists and unmappable tracks
+- skips stored tracks with no resolvable path, with structured warnings
 
-## Import configuration
+## M3U import behavior (`import --format m3u`)
 
-To enable import, add an `[import]` section to your config:
+- reads a directory tree of `.m3u8` files: nested directories become playlist folders
+- a flat directory becomes playlists directly under the sandbox root
+- no hierarchy is inferred from filenames
 
-```toml
-[library]
-traktor_root = "C:/Music"
-m3u_root = "../music"
+## NML export behavior (`export --format nml`)
 
-[export]
-collection_path = "/path/to/collection.nml"
-output_dir = "/path/to/playlists"
-
-[import]
-collection_path = "/path/to/collection.nml"
-import_dir = "/path/to/m3u-playlists"
-sandbox_name = "Imported Playlists"   # optional, defaults to "Imported Playlists"
-```
-
-Then run:
-
-```bash
-traktor-m3u-sync import --config traktor-m3u-sync.toml
-```
-
-You can override import settings on the CLI:
-
-```bash
-traktor-m3u-sync import \
-  --config traktor-m3u-sync.toml \
-  --collection /path/to/collection.nml \
-  --import-dir /path/to/m3u-playlists \
-  --sandbox-name "My Sandbox"
-```
-
-## Import behavior
-
-- rebuilds a single managed sandbox folder inside `collection.nml` from current M3U state
-- supports both nested directory layouts (preserving folder hierarchy) and flat directories
-- matches imported tracks against existing collection entries via reverse path translation
+- rebuilds a single managed sandbox folder inside `collection.nml` from stored state
+- matches stored tracks against existing collection entries via reverse path translation
 - writes playlist entries as `PRIMARYKEY` references only (no metadata duplication)
 - creates a timestamped backup of `collection.nml` before every save
-- validates the saved file can be reloaded and sandbox structure is correct
+- validates the saved file reloads and the sandbox structure is correct, restoring the backup on failure
 - skips unmatched tracks with structured warnings rather than failing
-- idempotent: running the same import twice produces the same result
+- idempotent: running the same export twice produces the same result
+
+## Track identity
+
+- primary identity is the casefolded POSIX library-relative path
+- tracks with no resolvable path fall back to a casefolded, whitespace-collapsed `artist - title` key
+- ambiguous fallback collisions are stored flagged as unresolved with their raw path, and are
+  excluded from identity dedup and from targets that need a path
 
 ## Project layout
 
@@ -223,14 +251,15 @@ traktor-m3u-sync import \
 
 ## Architecture
 
-Six-layer design, each implemented as a dedicated module:
+Store-mediated layers, each a dedicated module under `src/traktor_m3u_sync/`:
 
-1. **Config** — path mappings, sync mode, sandbox settings
-2. **NML domain** — load/inspect Traktor `collection.nml` via `traktor-nml-utils`
-3. **M3U domain** — read/write UTF-8 `.m3u8` playlists
-4. **Path translation** — Traktor `VOLUME`/`DIR`/`FILE` ↔ Unix paths
-5. **Sync orchestration** — export (NML→M3U) and import (M3U→NML sandbox) workflows
-6. **Reporting** — sync summaries, unmatched track warnings
+1. **Config** — format-based TOML sections and per-command overrides
+2. **Model** — frozen playlist/track dataclasses plus identity normalization
+3. **Store** — SQLite snapshot of imported playlists (schema-versioned, rebuildable)
+4. **Contracts** — importer/exporter protocols, path-mapping protocol, shared warning/result types
+5. **Paths** — Traktor and M3U path spaces translated into library-relative paths
+6. **Formats** — `nml` and `m3u` adapters (importer + exporter per format) plus the export-only `itunes` adapter
+7. **Services** — `run_import` / `run_export` orchestration and the CLI surface
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for full details and NML format notes.
 

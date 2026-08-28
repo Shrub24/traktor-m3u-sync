@@ -6,22 +6,30 @@
 traktor_root = "C:/Music"
 
 # M3U library root (can be absolute or relative)
-# Relative roots produce playlist entries relative to the output directory
+# Relative roots produce playlist entries relative to the M3U output directory
 m3u_root = "../music"
 
-[export]
+[store]
+# SQLite cache holding the imported playlist snapshot (rebuildable, safe to delete)
+# path = "~/.local/state/traktor-m3u-sync/store.db"
+
+[nml]
 # Path to the Traktor collection.nml file
-# collection_path = "/path/to/collection.nml"
+collection_path = "/path/to/collection.nml"
 
-# Directory where exported .m3u8 files will be written
-# output_dir = "/path/to/playlists"
-
-[import]
-# Path to the Traktor collection.nml file
-# collection_path = "/path/to/collection.nml"
-
-# Directory containing M3U files to import
-# import_dir = "/path/to/playlists"
-
-# Sandbox name in the Traktor collection (default: "Imported Playlists")
+# Sandbox folder in the Traktor playlist tree (default: "Imported Playlists")
 # sandbox_name = "Imported Playlists"
+
+[m3u]
+# Directory where exported .m3u8 files are written
+output_dir = "/path/to/playlists"
+
+# Directory containing .m3u8 files to import
+import_dir = "/path/to/incoming-playlists"
+
+[itunes]
+# Path to the iTunes Music Library XML file to write (required for `export --format itunes`)
+output_file = "/path/to/iTunes Music Library.xml"
+
+# Library root used to build absolute file:// track Locations (required for `export --format itunes`)
+base_path = "/path/to/music"

@@ -30,13 +30,24 @@ All options live under `services.traktor-m3u-sync.*`.
 | `configFile` | null/path | `null` | External TOML config (overrides generated config) |
 | `library.traktor_root` | string | — | Traktor library root (Windows path format) |
 | `library.m3u_root` | string | — | M3U library root |
+| `store.path` | null/string | `null` | SQLite store path; null keeps the tool default |
+| `nml.collection_path` | null/string | `null` | Path to `collection.nml`; required for `nml` format services |
+| `nml.sandbox_name` | string | `"Imported Playlists"` | Sandbox folder name in Traktor |
+| `m3u.output_dir` | null/string | `null` | Directory for generated `.m3u8` files; required for `export.format = "m3u"` |
+| `m3u.import_dir` | null/string | `null` | Directory containing M3U files to import; required for `import.format = "m3u"` |
+| `itunes.output_file` | null/string | `null` | iTunes Music Library XML output path; required for `export.format = "itunes"` |
+| `itunes.base_path` | null/string | `null` | Absolute library root for iTunes track Locations; required for `export.format = "itunes"` |
 | `export.enable` | bool | `false` | Enable the export oneshot service |
-| `export.collection_path` | null/string | `null` | Path to `collection.nml` |
-| `export.output_dir` | null/string | `null` | Directory for generated `.m3u8` files |
+| `export.format` | null/`"nml"`/`"m3u"`/`"itunes"` | `null` | Export target format, passed as `--format` (required when enabled) |
+| `export.extraArgs` | list of strings | `[]` | Extra CLI arguments appended after `--format` and `--config` |
 | `import.enable` | bool | `false` | Enable the import oneshot service |
-| `import.collection_path` | null/string | `null` | Path to `collection.nml` |
-| `import.import_dir` | null/string | `null` | Directory containing M3U files to import |
-| `import.sandbox_name` | string | `"Imported Playlists"` | Sandbox folder name in Traktor |
+| `import.format` | null/`"nml"`/`"m3u"` | `null` | Import source format, passed as `--format` (required when enabled) |
+| `import.extraArgs` | list of strings | `[]` | Extra CLI arguments appended after `--format` and `--config` |
+
+The rendered `[library]`, `[store]`, `[nml]`, `[m3u]`, and `[itunes]` tables match the
+TOML schema the CLI loader requires; the chosen service `format` decides
+which fields the module asserts on.
+`itunes` is export-only; `import.format` accepts only `nml` and `m3u`.
 
 The module creates two systemd oneshot services:
 
@@ -50,17 +61,24 @@ Both have `wantedBy = []` by default — they are never triggered automatically.
 When `configFile` is set, the module uses the external TOML file directly
 instead of generating one from Nix options. In that mode:
 
-- `library.*`, `export.*`, and `import.*` Nix options are still used for
-  service enablement but do not affect the runtime config file
+- `library.*`, `store.*`, `nml.*`, `m3u.*`, and `itunes.*` Nix options are not rendered
+  into any config file; the generated-config assertions are skipped
 - The runtime workflow values come entirely from the external file
+- `export.format` / `import.format` are still required (passed as `--format`)
 - Use this for externally managed configs (e.g. Syncthing-deployed files)
 
 ```nix
 services.traktor-m3u-sync = {
   enable = true;
   configFile = "/etc/traktor-m3u-sync/config.toml";
-  export.enable = true;
-  import.enable = true;
+  export = {
+    enable = true;
+    format = "m3u";
+  };
+  import = {
+    enable = true;
+    format = "nml";
+  };
 };
 ```
 
@@ -68,6 +86,19 @@ services.traktor-m3u-sync = {
 
 Services are oneshot units with no bundled timers or triggers. Attach
 scheduling in your own NixOS config.
+
+The module embeds no operational policy: `--dry-run` (export-only) and
+`--fail-on-warning` (exit `2` on completed-with-warnings) are plain CLI flags.
+Pass them through the appropriate public `extraArgs` option:
+
+```nix
+services.traktor-m3u-sync.export.extraArgs = [ "--fail-on-warning" ];
+```
+
+With `--fail-on-warning`, exit status `2` fails the oneshot unit by design, so
+`Restart=no` plus downstream unit dependencies/alerting can act on
+completed-with-warnings runs. Status `1` still means a real failure and
+status `0` means success (with or without warnings when the flag is absent).
 
 ### Export timer (daily at 03:00)
 
