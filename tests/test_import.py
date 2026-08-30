@@ -15,7 +15,6 @@ from traktor_m3u_sync.cli import app
 from traktor_m3u_sync.config import (
     AppConfig,
     ConfigError,
-    LibraryConfig,
     M3uConfig,
     NmlConfig,
     StoreConfig,
@@ -116,41 +115,31 @@ def test_read_import_tree_handles_flat_directory(tmp_path: Path) -> None:
 
 
 def test_to_rel_path_strips_relative_m3u_root() -> None:
-    mapping = M3uPathMapping(_library_config())
+    mapping = M3uPathMapping(_m3u_root())
 
     assert mapping.to_rel_path("../music/House/track.mp3") == "House/track.mp3"
 
 
 def test_to_rel_path_strips_absolute_m3u_root() -> None:
-    library = LibraryConfig(
-        traktor_root=PureWindowsPath("C:/Music"),
-        m3u_root=PurePosixPath("/absolute/music"),
-    )
-
-    mapping = M3uPathMapping(library)
+    mapping = M3uPathMapping(PurePosixPath("/absolute/music"))
 
     assert mapping.to_rel_path("/absolute/music/House/track.mp3") == "House/track.mp3"
 
 
 def test_to_rel_path_raises_on_path_outside_root() -> None:
-    mapping = M3uPathMapping(_library_config())
+    mapping = M3uPathMapping(_m3u_root())
 
     with pytest.raises(ReversePathTranslationError, match="does not fall beneath"):
         mapping.to_rel_path("../other/track.mp3")
 
 
 def test_to_rel_path_raises_on_absolute_root_with_relative_path() -> None:
-    library = LibraryConfig(
-        traktor_root=PureWindowsPath("C:/Music"),
-        m3u_root=PurePosixPath("/absolute/music"),
-    )
-
     with pytest.raises(ReversePathTranslationError, match="is relative"):
-        M3uPathMapping(library).to_rel_path("music/track.mp3")
+        M3uPathMapping(PurePosixPath("/absolute/music")).to_rel_path("music/track.mp3")
 
 
 def test_to_full_path_renders_primarykey_format() -> None:
-    result = TraktorPathMapping(_library_config()).to_full_path("House/track.mp3")
+    result = TraktorPathMapping(_nml_root()).to_full_path("House/track.mp3")
 
     assert result == "C:/Music/House/track.mp3"
 
@@ -377,10 +366,9 @@ def test_import_cli_summary_reports_warning_count(tmp_path: Path) -> None:
     _write_flat_m3u_fixture(tmp_path)
     config_path = tmp_path / "traktor-m3u-sync.toml"
     config_path.write_text(
-        '[library]\ntraktor_root = "C:/Music"\nm3u_root = "D:/elsewhere"\n\n'
         f'[store]\npath = "{tmp_path / "store.db"}"\n\n'
         "[nml]\n\n"
-        f'[m3u]\nimport_dir = "{tmp_path}"\n',
+        f'[m3u]\nlibrary_root = "D:/elsewhere"\nimport_dir = "{tmp_path}"\n',
         encoding="utf-8",
     )
 
@@ -442,10 +430,10 @@ def test_import_cli_exits_nonzero_on_missing_import_dir(tmp_path: Path) -> None:
     config_path = tmp_path / "traktor-m3u-sync.toml"
     config_path.write_text(
         (
-            '[library]\ntraktor_root = "C:/Music"\nm3u_root = "../music"\n\n'
             f'[store]\npath = "{tmp_path / "store.db"}"\n\n'
-            f'[nml]\ncollection_path = "{tmp_path / "collection.nml"}"\n\n'
-            f'[m3u]\noutput_dir = "{tmp_path / "out"}"\n'
+            f'[nml]\nlibrary_root = "C:/Music"\n'
+            f'collection_path = "{tmp_path / "collection.nml"}"\n\n'
+            f'[m3u]\nlibrary_root = "../music"\noutput_dir = "{tmp_path / "out"}"\n'
         ),
         encoding="utf-8",
     )
@@ -461,10 +449,10 @@ def test_import_cli_exits_nonzero_on_missing_import_directory(tmp_path: Path) ->
     config_path = tmp_path / "traktor-m3u-sync.toml"
     config_path.write_text(
         (
-            '[library]\ntraktor_root = "C:/Music"\nm3u_root = "../music"\n\n'
             f'[store]\npath = "{tmp_path / "store.db"}"\n\n'
-            f'[nml]\ncollection_path = "{tmp_path / "collection.nml"}"\n\n'
-            f'[m3u]\nimport_dir = "{tmp_path / "nowhere"}"\n'
+            f'[nml]\nlibrary_root = "C:/Music"\n'
+            f'collection_path = "{tmp_path / "collection.nml"}"\n\n'
+            f'[m3u]\nlibrary_root = "../music"\nimport_dir = "{tmp_path / "nowhere"}"\n'
         ),
         encoding="utf-8",
     )
@@ -492,10 +480,7 @@ def test_load_config_with_m3u_and_nml_sections(tmp_path: Path) -> None:
 def test_load_config_defaults_store_path(tmp_path: Path) -> None:
     config_path = tmp_path / "traktor-m3u-sync.toml"
     config_path.write_text(
-        '[library]\ntraktor_root = "C:/Music"\nm3u_root = "../music"\n\n'
-        "[store]\n\n"
-        '[nml]\ncollection_path = "/tmp/collection.nml"\n\n'
-        "[m3u]\n",
+        '[store]\n\n[nml]\ncollection_path = "/tmp/collection.nml"\n\n[m3u]\n',
         encoding="utf-8",
     )
 
@@ -507,7 +492,6 @@ def test_load_config_defaults_store_path(tmp_path: Path) -> None:
 def test_load_config_defaults_sandbox_name(tmp_path: Path) -> None:
     config_path = tmp_path / "traktor-m3u-sync.toml"
     config_path.write_text(
-        '[library]\ntraktor_root = "C:/Music"\nm3u_root = "../music"\n\n'
         f'[store]\npath = "{tmp_path / "store.db"}"\n\n'
         '[nml]\ncollection_path = "/tmp/collection.nml"\n\n'
         "[m3u]\n",
@@ -523,7 +507,6 @@ def test_load_config_defaults_sandbox_name(tmp_path: Path) -> None:
 def test_load_config_allows_missing_nml_collection_path(tmp_path: Path) -> None:
     config_path = tmp_path / "traktor-m3u-sync.toml"
     config_path.write_text(
-        '[library]\ntraktor_root = "C:/Music"\nm3u_root = "../music"\n\n'
         "[store]\n\n[nml]\n\n[m3u]\n",
         encoding="utf-8",
     )
@@ -536,7 +519,6 @@ def test_load_config_allows_missing_nml_collection_path(tmp_path: Path) -> None:
 def test_nml_commands_require_collection_path(tmp_path: Path) -> None:
     config_path = tmp_path / "traktor-m3u-sync.toml"
     config_path.write_text(
-        '[library]\ntraktor_root = "C:/Music"\nm3u_root = "../music"\n\n'
         "[store]\n\n[nml]\n\n[m3u]\n",
         encoding="utf-8",
     )
@@ -555,10 +537,9 @@ def test_m3u_import_works_without_nml_collection_path(tmp_path: Path) -> None:
     _write_flat_m3u_fixture(import_dir)
     config_path = tmp_path / "traktor-m3u-sync.toml"
     config_path.write_text(
-        '[library]\ntraktor_root = "C:/Music"\nm3u_root = "../music"\n\n'
         f'[store]\npath = "{tmp_path / "store.db"}"\n\n'
         "[nml]\n\n"
-        f'[m3u]\nimport_dir = "{import_dir}"\n',
+        f'[m3u]\nlibrary_root = "../music"\nimport_dir = "{import_dir}"\n',
         encoding="utf-8",
     )
 
@@ -587,7 +568,6 @@ def test_apply_import_overrides(tmp_path: Path) -> None:
 
 def test_apply_import_overrides_raises_without_import_dir(tmp_path: Path) -> None:
     config = AppConfig(
-        library=_library_config(),
         store=StoreConfig(path=tmp_path / "store.db"),
         nml=NmlConfig(collection_path=tmp_path / "collection.nml"),
         m3u=M3uConfig(),
@@ -599,9 +579,10 @@ def test_apply_import_overrides_raises_without_import_dir(tmp_path: Path) -> Non
 
 def test_apply_import_overrides_allows_nml_without_import_dir(tmp_path: Path) -> None:
     config = AppConfig(
-        library=_library_config(),
         store=StoreConfig(path=tmp_path / "store.db"),
-        nml=NmlConfig(collection_path=tmp_path / "collection.nml"),
+        nml=NmlConfig(
+            library_root=PureWindowsPath("C:/Music"), collection_path=tmp_path / "collection.nml"
+        ),
         m3u=M3uConfig(),
     )
 
@@ -617,11 +598,7 @@ def test_apply_import_overrides_allows_nml_without_import_dir(tmp_path: Path) ->
 
 
 def test_to_rel_path_rejects_traversal_under_absolute_root() -> None:
-    library = LibraryConfig(
-        traktor_root=PureWindowsPath("C:/Music"),
-        m3u_root=PurePosixPath("/absolute/music"),
-    )
-    mapping = M3uPathMapping(library)
+    mapping = M3uPathMapping(PurePosixPath("/absolute/music"))
 
     with pytest.raises(ReversePathTranslationError, match="does not start with"):
         mapping.to_rel_path("/absolute/music/../outside/file.mp3")
@@ -737,11 +714,12 @@ def test_export_validation_failure_restores_backup(
     assert collection_path.read_bytes() == original
 
 
-def _library_config() -> LibraryConfig:
-    return LibraryConfig(
-        traktor_root=PureWindowsPath("C:/Music"),
-        m3u_root=PurePosixPath("../music"),
-    )
+def _nml_root() -> PureWindowsPath:
+    return PureWindowsPath("C:/Music")
+
+
+def _m3u_root() -> PurePosixPath:
+    return PurePosixPath("../music")
 
 
 def _app_config(
@@ -752,10 +730,10 @@ def _app_config(
     import_dir: Path | None = None,
 ) -> AppConfig:
     return AppConfig(
-        library=_library_config(),
         store=StoreConfig(path=tmp_path / "store.db"),
-        nml=NmlConfig(collection_path=collection_path),
+        nml=NmlConfig(library_root=_nml_root(), collection_path=collection_path),
         m3u=M3uConfig(
+            library_root=_m3u_root(),
             output_dir=output_dir or tmp_path / "out",
             import_dir=import_dir or tmp_path / "m3u",
         ),
@@ -764,10 +742,10 @@ def _app_config(
 
 def _config_text(tmp_path: Path, collection_path: Path) -> str:
     return (
-        '[library]\ntraktor_root = "C:/Music"\nm3u_root = "../music"\n\n'
         f'[store]\npath = "{tmp_path / "store.db"}"\n\n'
-        f'[nml]\ncollection_path = "{collection_path}"\n\n'
-        f'[m3u]\noutput_dir = "{tmp_path / "out"}"\nimport_dir = "{tmp_path / "m3u"}"\n'
+        f'[nml]\nlibrary_root = "C:/Music"\ncollection_path = "{collection_path}"\n\n'
+        f'[m3u]\nlibrary_root = "../music"\n'
+        f'output_dir = "{tmp_path / "out"}"\nimport_dir = "{tmp_path / "m3u"}"\n'
     )
 
 
@@ -796,7 +774,7 @@ def _track(path: str, title: str, artist: str) -> Track:
 
 def _collection_index(tmp_path: Path) -> CollectionIndex:
     collection = load_collection(_write_importable_collection(tmp_path))
-    return TraktorPathMapping(_library_config()).index_collection(collection.nml)
+    return TraktorPathMapping(_nml_root()).index_collection(collection.nml)
 
 
 def _collection_path(config: AppConfig) -> Path:

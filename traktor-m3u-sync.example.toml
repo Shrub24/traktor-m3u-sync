@@ -1,13 +1,7 @@
 # Example configuration for traktor-m3u-sync
 # Copy to traktor-m3u-sync.toml and adjust paths for your setup.
-
-[library]
-# Traktor's library root (Windows path format, forward slashes OK)
-traktor_root = "C:/Music"
-
-# M3U library root (can be absolute or relative)
-# Relative roots produce playlist entries relative to the M3U output directory
-m3u_root = "../music"
+# Each format owns its library root in its own section; commands require only
+# the fields of the formats they select.
 
 [store]
 # SQLite cache holding the imported playlist snapshot (rebuildable, safe to delete)
@@ -17,10 +11,18 @@ m3u_root = "../music"
 # Path to the Traktor collection.nml file
 collection_path = "/path/to/collection.nml"
 
+# Traktor library root (Windows path format, forward slashes OK)
+# Required only for NML import/export
+library_root = "C:/Music"
+
 # Sandbox folder in the Traktor playlist tree (default: "Imported Playlists")
 # sandbox_name = "Imported Playlists"
 
 [m3u]
+# M3U library root (absolute or relative); required only for M3U import/export
+# Relative roots produce playlist entries relative to the M3U output directory
+library_root = "../music"
+
 # Directory where exported .m3u8 files are written
 output_dir = "/path/to/playlists"
 
@@ -31,5 +33,12 @@ import_dir = "/path/to/incoming-playlists"
 # Path to the iTunes Music Library XML file to write (required for `export --format itunes`)
 output_file = "/path/to/iTunes Music Library.xml"
 
-# Library root used to build absolute file:// track Locations (required for `export --format itunes`)
-base_path = "/path/to/music"
+# Library root as a complete consumer-facing `file:` URI (required for `export --format itunes`).
+# This is the path as the iTunes/Engine DJ consumer sees it, not the worker mount:
+# file://localhost/M:/Music (Windows drive), file:///srv/music (POSIX),
+# file://server/share/music (UNC).
+location_base = "file://localhost/M:/Music"
+
+# Optional worker-side mount of the library, used only for file-missing warnings.
+# Locations are never derived from it; omit to skip local existence checks.
+# check_base_path = "/srv/music"

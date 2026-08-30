@@ -7,6 +7,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Final, cast
 
+from .paths.uri import FileUriError, FileUriMapping
+
 DEFAULT_CONFIG_PATH: Final = Path("traktor-m3u-sync.toml")
 DEFAULT_STORE_PATH: Final = Path("~/.local/state/traktor-m3u-sync/store.db")
 DEFAULT_SANDBOX_NAME: Final = "Imported Playlists"
@@ -17,12 +19,6 @@ class ConfigError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class LibraryConfig:
-    traktor_root: PureWindowsPath
-    m3u_root: PurePosixPath
-
-
-@dataclass(frozen=True)
 class StoreConfig:
     path: Path = DEFAULT_STORE_PATH
 
@@ -30,12 +26,15 @@ class StoreConfig:
 @dataclass(frozen=True)
 class NmlConfig:
     # Required only for NML import/export commands, validated per command.
+    library_root: PureWindowsPath | None = None
     collection_path: Path | None = None
     sandbox_name: str = DEFAULT_SANDBOX_NAME
 
 
 @dataclass(frozen=True)
 class M3uConfig:
+    # Required only for M3U import/export commands, validated per command.
+    library_root: PurePosixPath | None = None
     output_dir: Path | None = None
     import_dir: Path | None = None
 
@@ -43,13 +42,15 @@ class M3uConfig:
 @dataclass(frozen=True)
 class ItunesConfig:
     # Required only for the iTunes export command, validated per command.
+    # location_base is a complete absolute file: URI; check_base_path is the
+    # optional worker-side mount used only for missing-file warnings.
     output_file: Path | None = None
-    base_path: Path | None = None
+    location_base: str | None = None
+    check_base_path: Path | None = None
 
 
 @dataclass(frozen=True)
 class AppConfig:
-    library: LibraryConfig
     nml: NmlConfig
     store: StoreConfig = StoreConfig()
     m3u: M3uConfig = M3uConfig()
@@ -67,31 +68,32 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"Invalid TOML in {expanded_path}: {exc}") from exc
 
-    library_table = _require_table(raw, "library")
     store_table = _require_table(raw, "store")
-    nml_table = _require_table(raw, "nml")
-    m3u_table = _require_table(raw, "m3u")
+    nml_table = _optional_table(raw, "nml")
+    m3u_table = _optional_table(raw, "m3u")
     itunes_table = _optional_table(raw, "itunes")
 
+    nml_library_root = _optional_string(nml_table, "library_root", "nml")
+    m3u_library_root = _optional_string(m3u_table, "library_root", "m3u")
+
     return AppConfig(
-        library=LibraryConfig(
-            traktor_root=PureWindowsPath(_require_string(library_table, "traktor_root", "library")),
-            m3u_root=PurePosixPath(_require_string(library_table, "m3u_root", "library")),
-        ),
         store=StoreConfig(
             path=_optional_path(store_table, "path", "store") or DEFAULT_STORE_PATH.expanduser()
         ),
         nml=NmlConfig(
+            library_root=PureWindowsPath(nml_library_root) if nml_library_root else None,
             collection_path=_optional_path(nml_table, "collection_path", "nml"),
             sandbox_name=_optional_string(nml_table, "sandbox_name", "nml") or DEFAULT_SANDBOX_NAME,
         ),
         m3u=M3uConfig(
+            library_root=PurePosixPath(m3u_library_root) if m3u_library_root else None,
             output_dir=_optional_path(m3u_table, "output_dir", "m3u"),
             import_dir=_optional_path(m3u_table, "import_dir", "m3u"),
         ),
         itunes=ItunesConfig(
             output_file=_optional_path(itunes_table, "output_file", "itunes"),
-            base_path=_optional_path(itunes_table, "base_path", "itunes"),
+            location_base=_optional_string(itunes_table, "location_base", "itunes"),
+            check_base_path=_optional_path(itunes_table, "check_base_path", "itunes"),
         ),
     )
 
@@ -107,12 +109,15 @@ def apply_import_overrides(
     """Apply CLI overrides for `import` and validate what that command needs."""
     m3u = replace(config.m3u, import_dir=import_dir or config.m3u.import_dir)
     nml = _override_nml(config.nml, collection_path)
-    if format == "m3u" and m3u.import_dir is None:
-        raise ConfigError(
-            "import_dir is required for M3U import: pass --import-dir or set [m3u].import_dir"
-        )
+    if format == "m3u":
+        if m3u.import_dir is None:
+            raise ConfigError(
+                "import_dir is required for M3U import: pass --import-dir or set [m3u].import_dir"
+            )
+        _require_m3u_root(m3u, "import")
     if format == "nml":
         _require_nml_collection(nml, "import")
+        _require_nml_root(nml, "import")
     return replace(
         config,
         store=_override_store(config.store, store_path),
@@ -130,20 +135,27 @@ def apply_export_overrides(
     output_dir: Path | None = None,
     sandbox_name: str | None = None,
     output_file: Path | None = None,
-    base_path: Path | None = None,
+    location_base: str | None = None,
+    check_base_path: Path | None = None,
 ) -> AppConfig:
     """Apply CLI overrides for `export` and validate what that command needs."""
     m3u = replace(config.m3u, output_dir=output_dir or config.m3u.output_dir)
-    if format == "m3u" and m3u.output_dir is None:
-        raise ConfigError(
-            "output_dir is required for M3U export: pass --output-dir or set [m3u].output_dir"
-        )
+    if format == "m3u":
+        if m3u.output_dir is None:
+            raise ConfigError(
+                "output_dir is required for M3U export: pass --output-dir or set [m3u].output_dir"
+            )
+        _require_m3u_root(m3u, "export")
     nml = _override_nml(config.nml, collection_path)
     if format == "nml":
         _require_nml_collection(nml, "export")
+        _require_nml_root(nml, "export")
     itunes = ItunesConfig(
         output_file=(output_file.expanduser() if output_file else config.itunes.output_file),
-        base_path=(base_path.expanduser() if base_path else config.itunes.base_path),
+        location_base=location_base or config.itunes.location_base,
+        check_base_path=(
+            check_base_path.expanduser() if check_base_path else config.itunes.check_base_path
+        ),
     )
     if format == "itunes":
         if itunes.output_file is None:
@@ -151,15 +163,15 @@ def apply_export_overrides(
                 "output_file is required for iTunes export: "
                 "pass --output-file or set [itunes].output_file"
             )
-        if itunes.base_path is None:
+        if itunes.location_base is None:
             raise ConfigError(
-                "base_path is required for iTunes export: "
-                "pass --base-path or set [itunes].base_path"
+                "location_base is required for iTunes export: "
+                "pass --location-base or set [itunes].location_base"
             )
-        if not itunes.base_path.is_absolute():
-            raise ConfigError(
-                f"base_path must be an absolute path for iTunes export, got: {itunes.base_path}"
-            )
+        try:
+            FileUriMapping(itunes.location_base)
+        except FileUriError as exc:
+            raise ConfigError(str(exc)) from exc
     return replace(
         config,
         store=_override_store(config.store, store_path),
@@ -175,6 +187,16 @@ def _require_nml_collection(nml: NmlConfig, command: str) -> None:
             f"collection_path is required for NML {command}: "
             "pass --collection or set [nml].collection_path"
         )
+
+
+def _require_nml_root(nml: NmlConfig, command: str) -> None:
+    if nml.library_root is None:
+        raise ConfigError(f"library_root is required for NML {command}: set [nml].library_root")
+
+
+def _require_m3u_root(m3u: M3uConfig, command: str) -> None:
+    if m3u.library_root is None:
+        raise ConfigError(f"library_root is required for M3U {command}: set [m3u].library_root")
 
 
 def _override_store(store: StoreConfig, store_path: Path | None) -> StoreConfig:
@@ -201,13 +223,6 @@ def _optional_table(raw: dict[str, Any], name: str) -> dict[str, Any]:
     if not isinstance(table, dict):
         raise ConfigError(f"Field '{name}' must be a table")
     return cast("dict[str, Any]", table)
-
-
-def _require_string(table: dict[str, Any], key: str, section: str) -> str:
-    value = _optional_string(table, key, section)
-    if value is None:
-        raise ConfigError(f"Missing required string field '{key}' in [{section}]")
-    return value
 
 
 def _optional_string(table: dict[str, Any], key: str, section: str) -> str | None:

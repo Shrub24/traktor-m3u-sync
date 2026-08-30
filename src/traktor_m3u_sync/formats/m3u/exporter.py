@@ -9,7 +9,7 @@ from typing import Final
 
 from ...contracts import AdapterWarning, SyncResult, playlist_label
 from ...model import Playlist, Track
-from ...paths.traktor import TraktorPathMapping
+from ...paths.m3u import M3uPathMapping
 from .writer import M3uTrack, playlist_file_path, write_m3u8
 
 FORMAT: Final[str] = "m3u"
@@ -17,7 +17,7 @@ FORMAT: Final[str] = "m3u"
 
 @dataclass(frozen=True)
 class M3uExporter:
-    mapping: TraktorPathMapping
+    mapping: M3uPathMapping
     output_dir: Path
 
     def write(self, playlists: Sequence[Playlist]) -> SyncResult:
@@ -57,9 +57,9 @@ def _keep(track: Track, label: str, warnings: list[AdapterWarning]) -> bool:
     return False
 
 
-def _render(track: Track, mapping: TraktorPathMapping) -> M3uTrack:
+def _render(track: Track, mapping: M3uPathMapping) -> M3uTrack:
     return M3uTrack(
-        path=mapping.render_for_m3u(track.path or ""),
+        path=mapping.to_full_path(track.path or ""),
         title=track.title,
         artist=track.artist,
         duration_seconds=track.duration_seconds,

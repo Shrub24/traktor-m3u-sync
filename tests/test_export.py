@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
@@ -13,15 +14,16 @@ from traktor_m3u_sync.cli import app
 from traktor_m3u_sync.config import (
     AppConfig,
     ConfigError,
-    LibraryConfig,
     M3uConfig,
     NmlConfig,
     StoreConfig,
     apply_export_overrides,
+    apply_import_overrides,
     load_config,
 )
 from traktor_m3u_sync.formats.m3u.writer import M3uTrack, playlist_file_path, write_m3u8
 from traktor_m3u_sync.formats.nml.reader import load_collection, read_playlists
+from traktor_m3u_sync.paths.m3u import M3uPathMapping
 from traktor_m3u_sync.paths.traktor import PathTranslationError, TraktorPathMapping
 from traktor_m3u_sync.services import run_export, run_import
 from traktor_m3u_sync.store import PlaylistStore, StoreError, StoreNotPopulatedError
@@ -43,8 +45,8 @@ def test_load_config_and_apply_export_overrides(tmp_path: Path) -> None:
         output_dir=tmp_path / "override-out",
     )
 
-    assert config.library.traktor_root == PureWindowsPath("C:/Music")
-    assert config.library.m3u_root == PurePosixPath("../music")
+    assert config.nml.library_root == PureWindowsPath("C:/Music")
+    assert config.m3u.library_root == PurePosixPath("../music")
     assert overridden.store.path == tmp_path / "override.db"
     assert overridden.m3u.output_dir == tmp_path / "override-out"
 
@@ -61,7 +63,7 @@ def test_apply_export_overrides_raises_without_output_dir(tmp_path: Path) -> Non
 
 def test_read_playlists_skips_smartlists(tmp_path: Path) -> None:
     collection = load_collection(_write_collection_fixture(tmp_path))
-    mapping = TraktorPathMapping(_library_config())
+    mapping = TraktorPathMapping(_nml_root())
 
     extracted = read_playlists(collection.nml, mapping)
 
@@ -76,15 +78,16 @@ def test_read_playlists_skips_smartlists(tmp_path: Path) -> None:
 # ── traktor path mapping ────────────────────────────────────────────────
 
 
-def test_entry_path_prefers_primarykey_and_renders_m3u_relative_root(tmp_path: Path) -> None:
+def test_entry_path_prefers_primarykey_and_round_trips_library_space(tmp_path: Path) -> None:
     collection = load_collection(_write_collection_fixture(tmp_path))
-    mapping = TraktorPathMapping(_library_config())
+    mapping = TraktorPathMapping(_nml_root())
     entry = _first_playlist_entry(collection)
 
     raw_path = mapping.entry_path(entry)
 
     assert raw_path == "C:/Music/House/track-one.mp3"
-    assert mapping.render_for_m3u(mapping.to_rel_path(raw_path)) == "../music/House/track-one.mp3"
+    assert mapping.to_rel_path(raw_path) == "House/track-one.mp3"
+    assert mapping.to_full_path("House/track-one.mp3") == "C:/Music/House/track-one.mp3"
 
 
 def test_entry_path_falls_back_to_location() -> None:
@@ -93,7 +96,7 @@ def test_entry_path_falls_back_to_location() -> None:
         artist="Artist Two",
         location=Locationtype(volume="C:", dir=":/Music/:House/", file="track-two.mp3"),
     )
-    mapping = TraktorPathMapping(_library_config())
+    mapping = TraktorPathMapping(_nml_root())
 
     raw_path = mapping.entry_path(entry)
 
@@ -103,28 +106,28 @@ def test_entry_path_falls_back_to_location() -> None:
 
 def test_entry_path_raises_when_neither_primarykey_nor_location() -> None:
     entry = Entrytype(title="Track", artist="Artist")
-    mapping = TraktorPathMapping(_library_config())
+    mapping = TraktorPathMapping(_nml_root())
 
     with pytest.raises(PathTranslationError, match="missing both"):
         mapping.entry_path(entry)
 
 
 def test_to_rel_path_raises_on_path_outside_root() -> None:
-    mapping = TraktorPathMapping(_library_config())
+    mapping = TraktorPathMapping(_nml_root())
 
     with pytest.raises(PathTranslationError, match="outside configured"):
         mapping.to_rel_path("D:/Other/track.mp3")
 
 
-def test_render_for_m3u_with_absolute_m3u_root() -> None:
-    library = LibraryConfig(
-        traktor_root=PureWindowsPath("C:/Music"),
-        m3u_root=PurePosixPath("/absolute/music"),
+def test_m3u_to_full_path_renders_relative_and_absolute_roots() -> None:
+    assert (
+        M3uPathMapping(PurePosixPath("/absolute/music")).to_full_path("House/track-one.mp3")
+        == "/absolute/music/House/track-one.mp3"
     )
-
-    result = TraktorPathMapping(library).render_for_m3u("House/track-one.mp3")
-
-    assert result == "/absolute/music/House/track-one.mp3"
+    assert (
+        M3uPathMapping(PurePosixPath("../music")).to_full_path("House/track-one.mp3")
+        == "../music/House/track-one.mp3"
+    )
 
 
 # ── two-command flow ────────────────────────────────────────────────────
@@ -223,39 +226,94 @@ def test_load_config_raises_on_missing_file(tmp_path: Path) -> None:
         load_config(tmp_path / "nonexistent.toml")
 
 
-def test_load_config_raises_on_missing_library_table(tmp_path: Path) -> None:
+def test_load_config_rejects_empty_library_root(tmp_path: Path) -> None:
     config_path = tmp_path / "bad.toml"
     config_path.write_text(
-        '[store]\npath = "/tmp/s.db"\n[nml]\ncollection_path = "/tmp/n"\n[m3u]\n',
+        '[store]\npath = "/tmp/s.db"\n[nml]\n[m3u]\nlibrary_root = ""\n',
         encoding="utf-8",
     )
 
-    with pytest.raises(ConfigError, match="Missing required \\[library\\] table"):
+    with pytest.raises(ConfigError, match="must be a non-empty string"):
         load_config(config_path)
 
 
-def test_load_config_raises_on_missing_required_field(tmp_path: Path) -> None:
-    config_path = tmp_path / "bad.toml"
+def test_m3u_import_requires_library_root(tmp_path: Path) -> None:
+    config = _app_config(tmp_path)
+    config = replace(config, m3u=replace(config.m3u, library_root=None))
+
+    with pytest.raises(ConfigError, match="library_root is required for M3U import"):
+        apply_import_overrides(config, format="m3u")
+
+
+def test_nml_export_requires_library_root(tmp_path: Path) -> None:
+    config = _app_config(tmp_path)
+    config = replace(config, nml=replace(config.nml, library_root=None))
+
+    with pytest.raises(ConfigError, match="library_root is required for NML export"):
+        apply_export_overrides(config, format="nml")
+
+
+def test_import_cli_fails_when_library_root_missing(tmp_path: Path) -> None:
+    config_path = tmp_path / "traktor-m3u-sync.toml"
     config_path.write_text(
-        '[library]\nm3u_root = "../music"\n\n[store]\npath = "/tmp/s.db"\n'
-        '[nml]\ncollection_path = "/tmp/n"\n[m3u]\n',
+        f'[store]\npath = "{tmp_path / "store.db"}"\n\n'
+        f'[nml]\ncollection_path = "{tmp_path / "collection.nml"}"\n\n'
+        f'[m3u]\nimport_dir = "{tmp_path / "in"}"\n',
         encoding="utf-8",
     )
 
-    with pytest.raises(ConfigError, match="Missing required string field 'traktor_root'"):
-        load_config(config_path)
+    result = RUNNER.invoke(app, ["import", "--format", "m3u", "--config", str(config_path)])
+
+    assert result.exit_code == 1
+    assert "ERROR code=config_error" in result.stderr
+    assert "library_root is required for M3U import" in result.stderr
 
 
-def test_load_config_raises_on_missing_format_table(tmp_path: Path) -> None:
-    config_path = tmp_path / "bad.toml"
+def test_load_config_allows_omitting_unselected_format_tables(tmp_path: Path) -> None:
+    config_path = tmp_path / "sync.toml"
     config_path.write_text(
-        '[library]\ntraktor_root = "C:/Music"\nm3u_root = "../music"\n\n'
-        '[store]\npath = "/tmp/s.db"\n[nml]\ncollection_path = "/tmp/n"\n',
+        f'[store]\npath = "{tmp_path / "store.db"}"\n\n'
+        f'[m3u]\nlibrary_root = "{tmp_path / "music"}"\nimport_dir = "{tmp_path / "in"}"\n\n'
+        "[itunes]\n"
+        'location_base = "file://localhost/M:/Music"\n'
+        f'output_file = "{tmp_path / "Library.xml"}"\n',
         encoding="utf-8",
     )
 
-    with pytest.raises(ConfigError, match=r"Missing required \[m3u\] table"):
-        load_config(config_path)
+    config = load_config(config_path)
+
+    assert config.nml == NmlConfig()
+    assert apply_import_overrides(config, format="m3u").m3u.import_dir == tmp_path / "in"
+    overridden = apply_export_overrides(config, format="itunes")
+    assert overridden.itunes.location_base == "file://localhost/M:/Music"
+
+    config_path.write_text(
+        f'[store]\npath = "{tmp_path / "store.db"}"\n\n'
+        f'[nml]\nlibrary_root = "C:/Music"\ncollection_path = "{tmp_path / "c.nml"}"\n',
+        encoding="utf-8",
+    )
+
+    assert load_config(config_path).m3u == M3uConfig()
+
+
+def test_nml_selection_without_nml_table_fails(tmp_path: Path) -> None:
+    config_path = tmp_path / "sync.toml"
+    config_path.write_text(
+        f'[store]\npath = "{tmp_path / "store.db"}"\n\n'
+        f'[m3u]\nlibrary_root = "{tmp_path / "music"}"\n',
+        encoding="utf-8",
+    )
+
+    result = RUNNER.invoke(app, ["export", "--format", "nml", "--config", str(config_path)])
+
+    assert result.exit_code == 1
+    assert "ERROR code=config_error" in result.stderr
+    assert "collection_path is required for NML export" in result.stderr
+
+    config = load_config(config_path)
+    config = replace(config, nml=NmlConfig(collection_path=tmp_path / "c.nml"))
+    with pytest.raises(ConfigError, match="library_root is required for NML export"):
+        apply_export_overrides(config, format="nml")
 
 
 # ── m3u writer edge cases ───────────────────────────────────────────────
@@ -448,10 +506,15 @@ def test_export_cli_dry_run_preserves_summary_store_and_target(tmp_path: Path) -
 
 def test_export_dry_run_absent_store_creates_nothing(tmp_path: Path) -> None:
     config = AppConfig(
-        library=_library_config(),
         store=StoreConfig(path=tmp_path / "nested" / "store.db"),
-        nml=NmlConfig(collection_path=tmp_path / "collection.nml"),
-        m3u=M3uConfig(output_dir=tmp_path / "out", import_dir=tmp_path / "in"),
+        nml=NmlConfig(
+            library_root=PureWindowsPath("C:/Music"), collection_path=tmp_path / "collection.nml"
+        ),
+        m3u=M3uConfig(
+            library_root=PurePosixPath("../music"),
+            output_dir=tmp_path / "out",
+            import_dir=tmp_path / "in",
+        ),
     )
 
     with pytest.raises(StoreError, match="not found for read-only access"):
@@ -533,28 +596,29 @@ def test_cli_real_failure_stays_exit_1_even_with_fail_on_warning(tmp_path: Path)
 # ── helpers ─────────────────────────────────────────────────────────────
 
 
-def _library_config() -> LibraryConfig:
-    return LibraryConfig(
-        traktor_root=PureWindowsPath("C:/Music"),
-        m3u_root=PurePosixPath("../music"),
-    )
+def _nml_root() -> PureWindowsPath:
+    return PureWindowsPath("C:/Music")
 
 
 def _app_config(tmp_path: Path, *, output_dir: Path | None = None) -> AppConfig:
     return AppConfig(
-        library=_library_config(),
         store=StoreConfig(path=tmp_path / "store.db"),
-        nml=NmlConfig(collection_path=tmp_path / "collection.nml"),
-        m3u=M3uConfig(output_dir=output_dir, import_dir=tmp_path / "in"),
+        nml=NmlConfig(library_root=_nml_root(), collection_path=tmp_path / "collection.nml"),
+        m3u=M3uConfig(
+            library_root=PurePosixPath("../music"),
+            output_dir=output_dir,
+            import_dir=tmp_path / "in",
+        ),
     )
 
 
 def _config_text(tmp_path: Path, collection: Path | None = None) -> str:
     return (
-        f'[library]\ntraktor_root = "C:/Music"\nm3u_root = "../music"\n\n'
         f'[store]\npath = "{tmp_path / "store.db"}"\n\n'
-        f'[nml]\ncollection_path = "{collection or tmp_path / "collection.nml"}"\n\n'
-        f'[m3u]\noutput_dir = "{tmp_path / "out"}"\nimport_dir = "{tmp_path / "in"}"\n'
+        f'[nml]\nlibrary_root = "C:/Music"\n'
+        f'collection_path = "{collection or tmp_path / "collection.nml"}"\n\n'
+        f'[m3u]\nlibrary_root = "../music"\n'
+        f'output_dir = "{tmp_path / "out"}"\nimport_dir = "{tmp_path / "in"}"\n'
     )
 
 

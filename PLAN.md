@@ -64,11 +64,12 @@ Sub-areas:
 
 **In-progress OpenSpec changes:**
 - `itunes-export` — store-to-iTunes XML exporter, including NixOS export service support
+- `format-path-mappings` — **breaking config migration**: `[library]` removed in favor of `[nml].library_root` / `[m3u].library_root`; `[itunes].base_path` replaced by consumer-facing `location_base` (full `file:` URI, e.g. `file://localhost/M:/Music`) plus optional worker-side `check_base_path` for missing-file warnings
 
 **Planned OpenSpec changes:** `sync-config`, `sync-reporting` (split as needed)
 
 Sub-areas:
-- config ergonomics: path mapping profiles, CLI overrides, validation
+- config ergonomics: format-owned path mappings, CLI overrides, selected-format validation
 - reporting improvements: JSON/text report formats, log verbosity
 - operational polish: exit codes, dry-run mode, verbosity flags
 - selective CI additions when the project is stable enough to benefit

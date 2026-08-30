@@ -66,7 +66,16 @@ def export(
     collection: Path | None = typer.Option(None, "--collection"),
     sandbox_name: str | None = typer.Option(None, "--sandbox-name"),
     output_file: Path | None = typer.Option(None, "--output-file"),
-    base_path: Path | None = typer.Option(None, "--base-path"),
+    location_base: str | None = typer.Option(
+        None,
+        "--location-base",
+        help="Absolute file: URI base for consumer Locations",
+    ),
+    check_base_path: Path | None = typer.Option(
+        None,
+        "--check-base-path",
+        help="Local mount used only for missing-file warnings",
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Rehearse the export against isolated temporary targets"
     ),
@@ -86,7 +95,8 @@ def export(
             output_dir=output_dir,
             sandbox_name=sandbox_name,
             output_file=output_file,
-            base_path=base_path,
+            location_base=location_base,
+            check_base_path=check_base_path,
         ),
         config,
         fail_on_warning=fail_on_warning,

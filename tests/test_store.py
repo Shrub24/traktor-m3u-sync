@@ -8,7 +8,6 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 import pytest
 from traktor_nml_utils.models.collection import Nml, Nodetype
 
-from traktor_m3u_sync.config import LibraryConfig
 from traktor_m3u_sync.formats.nml.exporter import NmlExporter
 from traktor_m3u_sync.formats.nml.reader import load_collection
 from traktor_m3u_sync.model import Playlist, Track
@@ -172,7 +171,7 @@ def test_distinct_fallback_identities_are_kept_apart() -> None:
 def test_nml_store_nml_is_invertible(tmp_path: Path) -> None:
     """collection.nml -> store -> collection.nml keeps hierarchy, order, and PRIMARYKEYs."""
     collection_path = _write_invertible_collection(tmp_path)
-    mapping = TraktorPathMapping(_library())
+    mapping = TraktorPathMapping(_nml_root())
     read = _playlists_from(collection_path, mapping)
 
     with PlaylistStore(tmp_path / "store.db") as store:
@@ -199,7 +198,7 @@ def test_nml_store_m3u_is_invertible(tmp_path: Path) -> None:
     from traktor_m3u_sync.paths.m3u import M3uPathMapping
 
     collection_path = _write_invertible_collection(tmp_path)
-    traktor = TraktorPathMapping(_library())
+    traktor = TraktorPathMapping(_nml_root())
     read = _playlists_from(collection_path, traktor)
 
     with PlaylistStore(tmp_path / "store.db") as store:
@@ -208,8 +207,8 @@ def test_nml_store_m3u_is_invertible(tmp_path: Path) -> None:
 
     out_dir = tmp_path / "m3u"
     out_dir.mkdir()
-    M3uExporter(traktor, out_dir).write(loaded)
-    back = M3uImporter(M3uPathMapping(_library()), out_dir).read()
+    M3uExporter(M3uPathMapping(_m3u_root()), out_dir).write(loaded)
+    back = M3uImporter(M3uPathMapping(_m3u_root()), out_dir).read()
 
     assert [(p.folder_path, p.name) for p in back.playlists] == [
         (p.folder_path, p.name) for p in loaded
@@ -227,11 +226,12 @@ def _query_track_ids(path: Path) -> list[int]:
         return [row[0] for row in connection.execute("SELECT id FROM tracks")]
 
 
-def _library() -> LibraryConfig:
-    return LibraryConfig(
-        traktor_root=PureWindowsPath("C:/Music"),
-        m3u_root=PurePosixPath("../music"),
-    )
+def _nml_root() -> PureWindowsPath:
+    return PureWindowsPath("C:/Music")
+
+
+def _m3u_root() -> PurePosixPath:
+    return PurePosixPath("../music")
 
 
 def _playlists_from(collection_path: Path, mapping: TraktorPathMapping) -> tuple[Playlist, ...]:

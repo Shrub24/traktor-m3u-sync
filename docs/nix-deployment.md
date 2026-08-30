@@ -28,15 +28,16 @@ All options live under `services.traktor-m3u-sync.*`.
 | `enable` | bool | `false` | Enable the traktor-m3u-sync services |
 | `package` | package | flake package | Override the runtime package |
 | `configFile` | null/path | `null` | External TOML config (overrides generated config) |
-| `library.traktor_root` | string | — | Traktor library root (Windows path format) |
-| `library.m3u_root` | string | — | M3U library root |
 | `store.path` | null/string | `null` | SQLite store path; null keeps the tool default |
+| `nml.library_root` | null/string | `null` | NML library root; required for `nml` format services |
 | `nml.collection_path` | null/string | `null` | Path to `collection.nml`; required for `nml` format services |
 | `nml.sandbox_name` | string | `"Imported Playlists"` | Sandbox folder name in Traktor |
+| `m3u.library_root` | null/string | `null` | M3U library root; required for `m3u` format services |
 | `m3u.output_dir` | null/string | `null` | Directory for generated `.m3u8` files; required for `export.format = "m3u"` |
 | `m3u.import_dir` | null/string | `null` | Directory containing M3U files to import; required for `import.format = "m3u"` |
 | `itunes.output_file` | null/string | `null` | iTunes Music Library XML output path; required for `export.format = "itunes"` |
-| `itunes.base_path` | null/string | `null` | Absolute library root for iTunes track Locations; required for `export.format = "itunes"` |
+| `itunes.location_base` | null/string | `null` | Complete absolute `file:` URI for iTunes track Locations; required for `export.format = "itunes"` |
+| `itunes.check_base_path` | null/string | `null` | Optional local worker path for iTunes missing-file warnings |
 | `export.enable` | bool | `false` | Enable the export oneshot service |
 | `export.format` | null/`"nml"`/`"m3u"`/`"itunes"` | `null` | Export target format, passed as `--format` (required when enabled) |
 | `export.extraArgs` | list of strings | `[]` | Extra CLI arguments appended after `--format` and `--config` |
@@ -44,9 +45,13 @@ All options live under `services.traktor-m3u-sync.*`.
 | `import.format` | null/`"nml"`/`"m3u"` | `null` | Import source format, passed as `--format` (required when enabled) |
 | `import.extraArgs` | list of strings | `[]` | Extra CLI arguments appended after `--format` and `--config` |
 
-The rendered `[library]`, `[store]`, `[nml]`, `[m3u]`, and `[itunes]` tables match the
-TOML schema the CLI loader requires; the chosen service `format` decides
-which fields the module asserts on.
+The rendered `[store]` table and selected format tables match the TOML schema
+the CLI loader requires. `nml.library_root` is required only for `nml`
+services, `m3u.library_root` only for `m3u` services, and iTunes requires
+`output_file` plus an absolute `file:` `location_base` only for iTunes export.
+The URI may use an empty, `localhost`, or hostname (UNC) authority; whitespace,
+malformed percent escapes, queries, and fragments are rejected during evaluation.
+`check_base_path` is optional and is used only for local worker warnings.
 `itunes` is export-only; `import.format` accepts only `nml` and `m3u`.
 
 The module creates two systemd oneshot services:
@@ -61,7 +66,7 @@ Both have `wantedBy = []` by default — they are never triggered automatically.
 When `configFile` is set, the module uses the external TOML file directly
 instead of generating one from Nix options. In that mode:
 
-- `library.*`, `store.*`, `nml.*`, `m3u.*`, and `itunes.*` Nix options are not rendered
+- `store.*`, `nml.*`, `m3u.*`, and `itunes.*` Nix options are not rendered
   into any config file; the generated-config assertions are skipped
 - The runtime workflow values come entirely from the external file
 - `export.format` / `import.format` are still required (passed as `--format`)

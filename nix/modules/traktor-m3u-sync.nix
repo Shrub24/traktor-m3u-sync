@@ -33,15 +33,43 @@ let
     "itunes"
   ];
 
-  # The CLI loads library, store, NML, and M3U tables unconditionally; NML collection_path is
-  # required per command and enforced by the assertions below.
+  nmlSelected =
+    (cfg.export.enable && cfg.export.format == "nml")
+    || (cfg.import.enable && cfg.import.format == "nml");
+  m3uSelected =
+    (cfg.export.enable && cfg.export.format == "m3u")
+    || (cfg.import.enable && cfg.import.format == "m3u");
+  itunesSelected = cfg.export.enable && cfg.export.format == "itunes";
+
+  validFileUriAuthority =
+    authority:
+    authority == ""
+    || authority == "localhost"
+    || (
+      builtins.match "^[A-Za-z0-9._~!$&'()*+,;=%-]+$" authority != null
+      && builtins.match "^-.*|.*-$" authority == null
+    );
+
+  validFileUri =
+    uri:
+    let
+      remainder = lib.removePrefix "file://" uri;
+      parts = lib.splitString "/" remainder;
+      authority = builtins.head parts;
+    in
+    lib.hasPrefix "file://" uri
+    && builtins.length parts > 1
+    && !(builtins.match ".*[^!-~].*" uri != null)
+    && builtins.match "^[^%]*(%[0-9A-Fa-f]{2}[^%]*)*$" uri != null
+    && builtins.match "^[^?#]*$" uri != null
+    && validFileUriAuthority authority;
+
   configData = {
-    library = nonNull cfg.library;
     store = nonNull cfg.store;
-    nml = nonNull cfg.nml;
-    m3u = nonNull cfg.m3u;
-    itunes = nonNull cfg.itunes;
-  };
+  }
+  // lib.optionalAttrs nmlSelected { nml = nonNull cfg.nml; }
+  // lib.optionalAttrs m3uSelected { m3u = nonNull cfg.m3u; }
+  // lib.optionalAttrs itunesSelected { itunes = nonNull cfg.itunes; };
 
   generatedConfigFile = format.generate "traktor-m3u-sync.toml" configData;
 
@@ -87,32 +115,6 @@ in
       '';
     };
 
-    library = {
-      traktor_root = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        example = "/data/traktor";
-        description = ''
-          Traktor library root directory (host path).
-          Rendered into the TOML config `[library]` table.
-          Accepts any string — including Windows-style paths — since
-          this is a runtime config value, not a Nix store path.
-        '';
-      };
-
-      m3u_root = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        example = "/data/playlists";
-        description = ''
-          M3U library root directory (host path).
-          Rendered into the TOML config `[library]` table.
-          Accepts any string — including Windows-style paths — since
-          this is a runtime config value, not a Nix store path.
-        '';
-      };
-    };
-
     store = {
       path = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
@@ -126,6 +128,16 @@ in
     };
 
     nml = {
+      library_root = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "M:\\Music";
+        description = ''
+          NML library root directory. Rendered into the TOML config `[nml]`
+          table and required for services whose format is `nml`.
+        '';
+      };
+
       collection_path = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
@@ -148,6 +160,16 @@ in
     };
 
     m3u = {
+      library_root = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "/data/music";
+        description = ''
+          M3U library root directory. Rendered into the TOML config `[m3u]`
+          table and required for services whose format is `m3u`.
+        '';
+      };
+
       output_dir = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
@@ -183,14 +205,24 @@ in
         '';
       };
 
-      base_path = lib.mkOption {
+      location_base = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        example = "/data/music";
+        example = "file://localhost/M:/Music";
         description = ''
-          Absolute library root used to construct iTunes track Locations.
+          Complete absolute `file:` URI used to construct iTunes track Locations.
           Rendered into the TOML config `[itunes]` table.
           Required when export.format is `itunes`.
+        '';
+      };
+
+      check_base_path = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "/srv/music";
+        description = ''
+          Optional local worker path used only for iTunes missing-file warnings.
+          Rendered into the TOML config `[itunes]` table.
         '';
       };
     };
@@ -241,20 +273,6 @@ in
   };
 
   config = lib.mkMerge [
-    (lib.mkIf cfg.enable {
-      # When using generated config, validate required options are set.
-      assertions = lib.optionals (cfg.configFile == null) [
-        {
-          assertion = cfg.library.traktor_root != null;
-          message = "services.traktor-m3u-sync.library.traktor_root is required when using generated config (no configFile override).";
-        }
-        {
-          assertion = cfg.library.m3u_root != null;
-          message = "services.traktor-m3u-sync.library.m3u_root is required when using generated config (no configFile override).";
-        }
-      ];
-    })
-
     (lib.mkIf (cfg.enable && cfg.export.enable) {
       assertions = [
         {
@@ -264,11 +282,19 @@ in
       ]
       ++ lib.optionals (cfg.configFile == null && cfg.export.format == "m3u") [
         {
+          assertion = cfg.m3u.library_root != null;
+          message = "services.traktor-m3u-sync.m3u.library_root is required when export.format is m3u.";
+        }
+        {
           assertion = cfg.m3u.output_dir != null;
           message = "services.traktor-m3u-sync.m3u.output_dir is required when export.format is m3u.";
         }
       ]
       ++ lib.optionals (cfg.configFile == null && cfg.export.format == "nml") [
+        {
+          assertion = cfg.nml.library_root != null;
+          message = "services.traktor-m3u-sync.nml.library_root is required when export.format is nml.";
+        }
         {
           assertion = cfg.nml.collection_path != null;
           message = "services.traktor-m3u-sync.nml.collection_path is required when export.format is nml.";
@@ -280,12 +306,12 @@ in
           message = "services.traktor-m3u-sync.itunes.output_file is required when export.format is itunes.";
         }
         {
-          assertion = cfg.itunes.base_path != null;
-          message = "services.traktor-m3u-sync.itunes.base_path is required when export.format is itunes.";
+          assertion = cfg.itunes.location_base != null;
+          message = "services.traktor-m3u-sync.itunes.location_base is required when export.format is itunes.";
         }
         {
-          assertion = cfg.itunes.base_path != null && lib.hasPrefix "/" cfg.itunes.base_path;
-          message = "services.traktor-m3u-sync.itunes.base_path must be absolute when export.format is itunes.";
+          assertion = cfg.itunes.location_base != null && validFileUri cfg.itunes.location_base;
+          message = "services.traktor-m3u-sync.itunes.location_base must be a complete absolute file: URI when export.format is itunes.";
         }
       ];
 
@@ -308,11 +334,19 @@ in
       ]
       ++ lib.optionals (cfg.configFile == null && cfg.import.format == "m3u") [
         {
+          assertion = cfg.m3u.library_root != null;
+          message = "services.traktor-m3u-sync.m3u.library_root is required when import.format is m3u.";
+        }
+        {
           assertion = cfg.m3u.import_dir != null;
           message = "services.traktor-m3u-sync.m3u.import_dir is required when import.format is m3u.";
         }
       ]
       ++ lib.optionals (cfg.configFile == null && cfg.import.format == "nml") [
+        {
+          assertion = cfg.nml.library_root != null;
+          message = "services.traktor-m3u-sync.nml.library_root is required when import.format is nml.";
+        }
         {
           assertion = cfg.nml.collection_path != null;
           message = "services.traktor-m3u-sync.nml.collection_path is required when import.format is nml.";

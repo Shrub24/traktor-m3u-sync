@@ -39,28 +39,35 @@ just check
 ## Configuration
 
 Create a TOML config file such as `traktor-m3u-sync.toml`. Sections are per format, not per
-command direction:
+command direction, and each format owns its library root. Commands validate only the fields of
+the formats they select — M3U-to-iTunes needs no NML configuration:
 
 ```toml
-[library]
-traktor_root = "C:/Music"          # Traktor's library root (Windows path format)
-m3u_root = "../music"              # M3U library root (absolute or relative)
-
 [store]
 path = "~/.local/state/traktor-m3u-sync/store.db"   # optional, this is the default
 
 [nml]
 collection_path = "/path/to/collection.nml"
-sandbox_name = "Imported Playlists"   # optional, this is the default
+library_root = "C:/Music"                           # Traktor library root (Windows path format); NML commands only
+sandbox_name = "Imported Playlists"                 # optional, this is the default
 
 [m3u]
-output_dir = "/path/to/playlists"     # required for `export --format m3u`
-import_dir = "/path/to/incoming"      # required for `import --format m3u`
+library_root = "../music"                           # M3U library root (absolute or relative); M3U commands only
+output_dir = "/path/to/playlists"                   # required for `export --format m3u`
+import_dir = "/path/to/incoming"                    # required for `import --format m3u`
 
 [itunes]
-output_file = "/path/to/iTunes Music Library.xml"  # required for `export --format itunes`
-base_path = "/path/to/music"                       # library root for track Locations, ditto
+output_file = "/path/to/iTunes Music Library.xml"   # required for `export --format itunes`
+location_base = "file://localhost/M:/Music"         # consumer-facing library root as a full `file:` URI, ditto
+check_base_path = "/path/to/music"                  # optional worker mount, used only for file-missing warnings
 ```
+
+> **Breaking migration (format-path-mappings):** the global `[library]` table is gone — move
+> `traktor_root` to `[nml].library_root` and `m3u_root` to `[m3u].library_root`. `[itunes].base_path`
+> is replaced by `location_base`, a complete `file:` URI of the library root *as the DJ consumer sees
+> it* (`file://localhost/M:/Music`, `file:///srv/music`, or UNC `file://server/share/music`); track
+> Locations are rendered from it regardless of the worker's own filesystem. Add `check_base_path`
+> only if the worker has a local mount worth warning on.
 
 ## Commands
 
@@ -92,7 +99,8 @@ traktor-m3u-sync export --format nml \
 traktor-m3u-sync export --format itunes \
   --config traktor-m3u-sync.toml \
   --output-file "/path/to/iTunes Music Library.xml" \
-  --base-path /path/to/music
+  --location-base "file://localhost/M:/Music" \
+  --check-base-path /path/to/music
 ```
 
 A store written by an older schema version is rejected with a structured error pointing at
@@ -204,7 +212,7 @@ its own; operators that want warning-sensitive oneshots override the service
 ## M3U export behavior (`export --format m3u`)
 
 - writes one UTF-8 `.m3u8` file per playlist, mirroring the stored folder hierarchy
-- renders paths in M3U space from `[library].m3u_root`
+- renders paths from `[m3u].library_root` only, without consulting NML configuration
 - minimally sanitizes filesystem-invalid playlist and folder names
 - skips stored tracks with no resolvable path, with structured warnings
 
@@ -217,7 +225,7 @@ its own; operators that want warning-sensitive oneshots override the service
 ## NML export behavior (`export --format nml`)
 
 - rebuilds a single managed sandbox folder inside `collection.nml` from stored state
-- matches stored tracks against existing collection entries via reverse path translation
+- matches stored tracks against existing collection entries by normalizing them through `[nml].library_root`
 - writes playlist entries as `PRIMARYKEY` references only (no metadata duplication)
 - creates a timestamped backup of `collection.nml` before every save
 - validates the saved file reloads and the sandbox structure is correct, restoring the backup on failure
@@ -257,7 +265,7 @@ Store-mediated layers, each a dedicated module under `src/traktor_m3u_sync/`:
 2. **Model** — frozen playlist/track dataclasses plus identity normalization
 3. **Store** — SQLite snapshot of imported playlists (schema-versioned, rebuildable)
 4. **Contracts** — importer/exporter protocols, path-mapping protocol, shared warning/result types
-5. **Paths** — Traktor and M3U path spaces translated into library-relative paths
+5. **Paths** — adapter-owned roots translating native path spaces to/from library-relative paths, plus a consumer `file:` URI mapping for iTunes
 6. **Formats** — `nml` and `m3u` adapters (importer + exporter per format) plus the export-only `itunes` adapter
 7. **Services** — `run_import` / `run_export` orchestration and the CLI surface
 

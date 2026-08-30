@@ -7,7 +7,6 @@ from pathlib import PurePosixPath, PureWindowsPath
 
 from traktor_nml_utils.models.collection import Entrytype, Nml
 
-from ..config import LibraryConfig
 from ..model import Track
 from ..model.identity import fallback_identity, normalize_identity
 
@@ -42,28 +41,24 @@ class CollectionIndex:
 
 @dataclass(frozen=True)
 class TraktorPathMapping:
-    library: LibraryConfig
+    library_root: PureWindowsPath
 
     def to_rel_path(self, raw_path: str) -> str:
         """Translate a Traktor path spelling into a library-relative POSIX path."""
         source = PureWindowsPath(raw_path.replace("/", "\\"))
         try:
-            relative = source.relative_to(self.library.traktor_root)
+            relative = source.relative_to(self.library_root)
         except ValueError as exc:
             raise PathTranslationError(
                 f"Track path '{source}' is outside configured "
-                f"Traktor root '{self.library.traktor_root}'"
+                f"NML library root '{self.library_root}'"
             ) from exc
         return relative.as_posix()
 
     def to_full_path(self, rel_path: str) -> str:
         """Render a library-relative path as a canonical PRIMARYKEY value."""
-        rendered = str(self.library.traktor_root.joinpath(*PurePosixPath(rel_path).parts))
+        rendered = str(self.library_root.joinpath(*PurePosixPath(rel_path).parts))
         return rendered.replace("\\", "/")
-
-    def render_for_m3u(self, rel_path: str) -> str:
-        """Render a library-relative path in M3U space."""
-        return self.library.m3u_root.joinpath(*PurePosixPath(rel_path).parts).as_posix()
 
     def entry_path(self, entry: Entrytype) -> str:
         """Select the path spelling of a Traktor entry (PRIMARYKEY wins)."""

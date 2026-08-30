@@ -12,6 +12,7 @@ from typing import Final
 from ...contracts import AdapterWarning, SyncResult, playlist_label
 from ...fs import write_atomic
 from ...model import Playlist, Track
+from ...paths.uri import FileUriMapping
 from .writer import ItunesPlaylistEntry, ItunesTrack, build_document, render_document
 
 FORMAT: Final[str] = "itunes"
@@ -56,8 +57,10 @@ class _IdPool:
 
 @dataclass(frozen=True)
 class ItunesExporter:
-    base_path: Path
+    locations: FileUriMapping
     output_file: Path
+    # Optional worker-side mount; used only for file_missing warnings, never for Locations.
+    check_base_path: Path | None = None
 
     def write(self, playlists: Sequence[Playlist]) -> SyncResult:
         warnings: list[AdapterWarning] = []
@@ -85,15 +88,16 @@ class ItunesExporter:
         track_ids: dict[str, int] = {}
         for track_id, identity in enumerate(sorted(candidates), start=1):
             source, path = candidates[identity]
-            location = self.base_path / path
-            if not location.exists():
-                warnings.append(
-                    AdapterWarning(
-                        code="file_missing",
-                        message="Track file not found on the local filesystem",
-                        detail=location.as_posix(),
+            if self.check_base_path is not None:
+                checked = self.check_base_path / path
+                if not checked.exists():
+                    warnings.append(
+                        AdapterWarning(
+                            code="file_missing",
+                            message="Track file not found on the local filesystem",
+                            detail=checked.as_posix(),
+                        )
                     )
-                )
             track_ids[identity] = track_id
             tracks.append(
                 ItunesTrack(
@@ -101,7 +105,7 @@ class ItunesExporter:
                     persistent_id=ids.allocate(_seed("track", identity)),
                     name=source.title,
                     artist=source.artist,
-                    location=location.as_uri(),
+                    location=self.locations.to_uri(path),
                     album=source.album,
                     duration_ms=(
                         None if source.duration_seconds is None else source.duration_seconds * 1000
@@ -113,7 +117,7 @@ class ItunesExporter:
         document = build_document(
             tracks,
             entries,
-            self.base_path,
+            self.locations.music_folder(),
             datetime.now(UTC),
             ids.allocate(_seed("library", LIBRARY_PERSISTENT_SEED)),
         )

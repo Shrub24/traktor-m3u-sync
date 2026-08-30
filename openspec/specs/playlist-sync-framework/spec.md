@@ -39,7 +39,7 @@ The system SHALL route all format reading and writing through importer and expor
 - **THEN** it emits a warning in the same structured form regardless of format
 
 ### Requirement: Format-based configuration sections
-The system SHALL load settings from per-format configuration sections together with library root and store sections, and SHALL allow CLI flags to override the fields each command uses.
+The system SHALL load store settings together with format-owned configuration sections, and SHALL allow CLI flags to override the fields each selected command uses without requiring unrelated format settings.
 
 #### Scenario: CLI overrides configured values
 - **WHEN** configuration defines format section values and the user also passes CLI overrides for the invoked command
@@ -53,6 +53,10 @@ The system SHALL load settings from per-format configuration sections together w
 - **WHEN** the user runs export with format itunes
 - **THEN** the command loads its settings from the `[itunes]` configuration section
 - **AND** the supported export formats include itunes alongside m3u and nml
+
+#### Scenario: Unselected format configuration omitted
+- **WHEN** a command does not select NML
+- **THEN** it does not require NML path settings to load or run
 
 ### Requirement: Support explicit operational command controls
 The system SHALL expose explicit command flags for operational behavior without changing the default import/export result contract.

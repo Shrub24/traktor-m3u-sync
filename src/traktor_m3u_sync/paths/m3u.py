@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-from ..config import LibraryConfig
 from ..model.identity import to_posix
 
 
@@ -15,16 +14,16 @@ class ReversePathTranslationError(ValueError):
 
 @dataclass(frozen=True)
 class M3uPathMapping:
-    library: LibraryConfig
+    library_root: PurePosixPath
 
     def to_rel_path(self, path_text: str) -> str:
         """Strip the M3U root prefix from a parsed entry path."""
         posix_path = PurePosixPath(to_posix(path_text))
-        return _strip_root_prefix(posix_path, self.library.m3u_root).as_posix()
+        return _strip_root_prefix(posix_path, self.library_root).as_posix()
 
     def to_full_path(self, rel_path: str) -> str:
         """Render a library-relative path as an M3U entry line."""
-        return self.library.m3u_root.joinpath(*PurePosixPath(rel_path).parts).as_posix()
+        return self.library_root.joinpath(*PurePosixPath(rel_path).parts).as_posix()
 
 
 def _strip_root_prefix(posix_path: PurePosixPath, m3u_root: PurePosixPath) -> PurePosixPath:

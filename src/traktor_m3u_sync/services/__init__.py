@@ -7,13 +7,14 @@ import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import Final
+from typing import Final, TypeVar
 
 from ..config import AppConfig, ConfigError
 from ..contracts import Exporter, Importer, ImportResult, SyncResult
 from ..formats import itunes, m3u, nml
 from ..paths.m3u import M3uPathMapping
 from ..paths.traktor import TraktorPathMapping
+from ..paths.uri import FileUriMapping
 from ..store import PlaylistStore, StoreNotPopulatedError
 
 SUPPORTED_IMPORT_FORMATS: Final[tuple[str, ...]] = ("nml", "m3u")
@@ -94,31 +95,37 @@ def _unknown(format: str, supported: tuple[str, ...], command: str) -> str:
 
 _IMPORTERS: Final[Mapping[str, Callable[[AppConfig], Importer]]] = {
     "nml": lambda config: nml.NmlImporter(
-        TraktorPathMapping(config.library),
+        TraktorPathMapping(_require(config.nml.library_root, "library_root")),
         _require(config.nml.collection_path, "collection_path"),
     ),
     "m3u": lambda config: m3u.M3uImporter(
-        M3uPathMapping(config.library), _require(config.m3u.import_dir, "import_dir")
+        M3uPathMapping(_require(config.m3u.library_root, "library_root")),
+        _require(config.m3u.import_dir, "import_dir"),
     ),
 }
 
 _EXPORTERS: Final[Mapping[str, Callable[[AppConfig], Exporter]]] = {
     "m3u": lambda config: m3u.M3uExporter(
-        TraktorPathMapping(config.library), _require(config.m3u.output_dir, "output_dir")
+        M3uPathMapping(_require(config.m3u.library_root, "library_root")),
+        _require(config.m3u.output_dir, "output_dir"),
     ),
     "nml": lambda config: nml.NmlExporter(
-        TraktorPathMapping(config.library),
+        TraktorPathMapping(_require(config.nml.library_root, "library_root")),
         _require(config.nml.collection_path, "collection_path"),
         config.nml.sandbox_name,
     ),
     "itunes": lambda config: itunes.ItunesExporter(
-        _require(config.itunes.base_path, "base_path"),
+        FileUriMapping(_require(config.itunes.location_base, "location_base")),
         _require(config.itunes.output_file, "output_file"),
+        config.itunes.check_base_path,
     ),
 }
 
 
-def _require(path: Path | None, field: str) -> Path:
-    if path is None:
+T = TypeVar("T")
+
+
+def _require(value: T | None, field: str) -> T:
+    if value is None:
         raise ConfigError(f"{field} is required for this command")
-    return path
+    return value

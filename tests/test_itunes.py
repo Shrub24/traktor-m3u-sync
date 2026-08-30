@@ -15,7 +15,6 @@ from traktor_m3u_sync.config import (
     AppConfig,
     ConfigError,
     ItunesConfig,
-    LibraryConfig,
     M3uConfig,
     NmlConfig,
     StoreConfig,
@@ -26,6 +25,7 @@ from traktor_m3u_sync.formats.itunes import exporter as itunes_exporter
 from traktor_m3u_sync.formats.itunes.exporter import ItunesExporter
 from traktor_m3u_sync.model import Playlist, Track
 from traktor_m3u_sync.model.identity import identify
+from traktor_m3u_sync.paths.uri import FileUriError, FileUriMapping
 from traktor_m3u_sync.services import run_export, run_import
 from traktor_m3u_sync.store import StoreNotPopulatedError
 
@@ -47,7 +47,7 @@ def test_export_writes_minimal_plus_plist_document(tmp_path: Path) -> None:
     assert document["Minor Version"] == 1
     assert document["Application Version"] == "traktor-m3u-sync"
     assert re.search(r"<date>\d{4}-\d{2}-\d{2}T[\d:]+Z</date>", _xml(tmp_path))
-    assert document["Music Folder"] == f"{base.as_uri()}/"
+    assert document["Music Folder"] == f"file://{base}/"
     assert PERSISTENT_ID.match(document["Library Persistent ID"])
 
     (entry,) = document["Tracks"].values()
@@ -56,7 +56,7 @@ def test_export_writes_minimal_plus_plist_document(tmp_path: Path) -> None:
     assert entry["Album"] == "Album One"
     assert entry["Total Time"] == 123000
     assert entry["Track Type"] == "File"
-    assert entry["Location"] == f"{(base / 'House/track.mp3').as_uri()}"
+    assert entry["Location"] == f"file://{base}/House/track.mp3"
 
     folders = [p for p in document["Playlists"] if p.get("Folder")]
     playlist = next(p for p in document["Playlists"] if not p.get("Folder"))
@@ -70,7 +70,7 @@ def test_omits_unknown_metadata_and_never_emits_smart_fields(tmp_path: Path) -> 
     playlists = (Playlist(name="Bare", tracks=(track,)),)
 
     output = tmp_path / "Library.xml"
-    ItunesExporter(base, output).write(playlists)
+    ItunesExporter(_locations(base), output).write(playlists)
     document = plistlib.load(output.open("rb"))
 
     entry = next(iter(document["Tracks"].values()))
@@ -92,7 +92,7 @@ def test_identifiers_stable_across_repeated_exports(tmp_path: Path) -> None:
         _playlist(base, name="Deep", rel="House/b-track.mp3"),
         _playlist(base, name="Root", rel="House/a-track.mp3"),
     )
-    exporter = ItunesExporter(base, tmp_path / "Library.xml")
+    exporter = ItunesExporter(_locations(base), tmp_path / "Library.xml")
 
     exporter.write(playlists)
     first = plistlib.load((tmp_path / "Library.xml").open("rb"))
@@ -113,8 +113,8 @@ def test_track_ids_assigned_in_sorted_identity_order(tmp_path: Path) -> None:
     document = _export(base, playlists, tmp_path)
 
     ids = {entry["Location"]: entry["Track ID"] for entry in document["Tracks"].values()}
-    alpha = ids[f"{(base / 'House/alpha.mp3').as_uri()}"]
-    zeta = ids[f"{(base / 'House/zeta.mp3').as_uri()}"]
+    alpha = ids[f"file://{base}/House/alpha.mp3"]
+    zeta = ids[f"file://{base}/House/zeta.mp3"]
     assert alpha < zeta
     assert list(document["Tracks"]) == [str(i) for i in sorted(ids.values())]
 
@@ -199,19 +199,83 @@ def test_truncated_hash_collisions_resolve_deterministically(
 
 
 @pytest.mark.parametrize(
-    "rel",
-    ["House/01 Track.mp3", "House/#9 track.mp3", "House/Ünïcødé ßong.mp3"],
+    ("rel", "encoded"),
+    [
+        ("House/01 Track.mp3", "House/01%20Track.mp3"),
+        ("House/#9 track.mp3", "House/%239%20track.mp3"),
+        ("House/100% pure.mp3", "House/100%25%20pure.mp3"),
+        ("House/Ünïcødé ßong.mp3", "House/%C3%9Cn%C3%AFc%C3%B8d%C3%A9%20%C3%9Fong.mp3"),
+    ],
 )
-def test_location_percent_encodes_special_characters(tmp_path: Path, rel: str) -> None:
-    base = _library(tmp_path)
-    playlists = (_playlist(base, rel=rel),)
+def test_location_percent_encodes_special_characters(
+    tmp_path: Path, rel: str, encoded: str
+) -> None:
+    playlists = (Playlist(name="Deep", tracks=(_resolved_track(rel),)),)
+    output = tmp_path / "Library.xml"
 
-    document = _export(base, playlists, tmp_path)
+    result = ItunesExporter(FileUriMapping("file://localhost/M:/Music"), output).write(playlists)
+    document = plistlib.load(output.open("rb"))
 
     location = next(iter(document["Tracks"].values()))["Location"]
-    assert location == (base / rel).as_uri()
-    assert location.startswith("file://")
+    assert location == f"file://localhost/M:/Music/{encoded}"
+    assert result.warnings == ()
     assert all(ord(char) < 128 for char in location)
+
+
+@pytest.mark.parametrize(
+    ("base", "expected"),
+    [
+        ("file:///srv/music", "file:///srv/music/House/track.mp3"),
+        ("file://localhost/M:/Music", "file://localhost/M:/Music/House/track.mp3"),
+        ("file://server/share/music", "file://server/share/music/House/track.mp3"),
+        ("file:///srv/music/", "file:///srv/music/House/track.mp3"),
+    ],
+)
+def test_file_uri_mapping_preserves_authority_and_drive(base: str, expected: str) -> None:
+    assert FileUriMapping(base).to_uri("House/track.mp3") == expected
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "music",
+        "file:music",
+        "http://host/music",
+        "file:///srv?x=1",
+        "file:///srv#frag",
+        "file:///srv?",
+        "file:///srv#",
+        "",
+        "file:///srv music",
+        "file:///srv/\tsong",
+        "file:///srv/%zz",
+        "file:///srv/%2",
+        "file:///srv/%",
+        "file://lo%2/calhost/x",
+        "file://user@host/share",
+        "file://host:80/share",
+        "file://bad\\host/share",
+        "file:///srv/%ff\x7f",
+    ],
+)
+def test_file_uri_mapping_rejects_invalid_bases(bad: str) -> None:
+    with pytest.raises(FileUriError):
+        FileUriMapping(bad)
+
+
+@pytest.mark.parametrize(
+    "good",
+    [
+        "file:///srv/music",
+        "file://localhost/M:/Music",
+        "file://file-server.music.local/share/music",
+        "file://FS_01/share",
+        "file:///srv/caf%C3%A9%20bar",
+        "FILE:///srv/music",
+    ],
+)
+def test_file_uri_mapping_accepts_valid_bases(good: str) -> None:
+    assert FileUriMapping(good).base == good.rstrip("/")
 
 
 def test_scenario_location_matches_expected_uri(tmp_path: Path) -> None:
@@ -220,7 +284,7 @@ def test_scenario_location_matches_expected_uri(tmp_path: Path) -> None:
     document = _export(base, (_playlist(base, rel="House/01 Track.mp3"),), tmp_path)
 
     entry = next(iter(document["Tracks"].values()))
-    assert Path(entry["Location"].removeprefix("file://")).name == "01%20Track.mp3"
+    assert entry["Location"] == f"file://{base}/House/01%20Track.mp3"
     assert entry["Total Time"] == 123 * 1000
 
 
@@ -230,7 +294,7 @@ def test_unresolved_track_skipped_with_warning(tmp_path: Path) -> None:
     playlists = (Playlist(name="Mixed", tracks=(_resolved_track("House/good.mp3"), unresolved)),)
     output = tmp_path / "Library.xml"
 
-    result = ItunesExporter(base, output).write(playlists)
+    result = ItunesExporter(_locations(base), output).write(playlists)
     document = plistlib.load(output.open("rb"))
 
     skip = [w for w in result.warnings if w.code == "track_unresolved"]
@@ -286,18 +350,50 @@ def test_sibling_folder_keeps_distinct_parent(tmp_path: Path) -> None:
 
 
 def test_missing_files_warn_without_blocking_export(tmp_path: Path) -> None:
-    base = tmp_path / "unmounted"
+    check = tmp_path / "unmounted"
     playlists = (Playlist(name="Detached", tracks=(_resolved_track("House/ghost.mp3"),)),)
     output = tmp_path / "Library.xml"
 
-    result = ItunesExporter(base, output).write(playlists)
+    result = ItunesExporter(FileUriMapping("file://localhost/M:/Music"), output, check).write(
+        playlists
+    )
     document = plistlib.load(output.open("rb"))
 
     missing = [w for w in result.warnings if w.code == "file_missing"]
     assert len(missing) == 1
-    assert "House/ghost.mp3" in (missing[0].detail or "")
+    assert (check / "House/ghost.mp3").as_posix() in (missing[0].detail or "")
+    assert next(iter(document["Tracks"].values()))["Location"] == (
+        "file://localhost/M:/Music/House/ghost.mp3"
+    )
     assert len(document["Tracks"]) == 1
     assert result.counts["warnings_emitted"] == 1
+
+
+def test_divergent_check_and_location_bases(tmp_path: Path) -> None:
+    check = tmp_path / "srv" / "music"
+    playlists = (_playlist(check, rel="House/track.mp3"),)
+    output = tmp_path / "Library.xml"
+
+    result = ItunesExporter(FileUriMapping("file://localhost/M:/Music"), output, check).write(
+        playlists
+    )
+    document = plistlib.load(output.open("rb"))
+
+    assert result.warnings == ()
+    assert next(iter(document["Tracks"].values()))["Location"] == (
+        "file://localhost/M:/Music/House/track.mp3"
+    )
+    assert document["Music Folder"] == "file://localhost/M:/Music/"
+
+
+def test_omitted_check_base_never_warns_missing(tmp_path: Path) -> None:
+    playlists = (Playlist(name="Detached", tracks=(_resolved_track("House/ghost.mp3"),)),)
+    output = tmp_path / "Library.xml"
+
+    result = ItunesExporter(FileUriMapping("file:///srv/music"), output).write(playlists)
+
+    assert result.warnings == ()
+    assert result.counts["tracks_exported"] == 1
 
 
 # ── end-to-end: m3u import -> store -> itunes export ────────────────────
@@ -330,12 +426,48 @@ def test_m3u_import_then_itunes_export_keeps_referential_integrity(
     assert exported.exit_code == 0
     assert "SUMMARY playlists_written=2 tracks_exported=2" in exported.stdout
     document = plistlib.load((tmp_path / "out" / "iTunes Music Library.xml").open("rb"))
+    assert document["Music Folder"] == "file://localhost/M:/Music/"
+    assert all(
+        entry["Location"].startswith("file://localhost/M:/Music/")
+        for entry in document["Tracks"].values()
+    )
+    assert "WARNING code=file_missing" not in exported.stderr
     track_ids = {entry["Track ID"] for entry in document["Tracks"].values()}
     names = {p["Name"] for p in document["Playlists"] if not p.get("Folder")}
     assert names == {"Deep", "Rave"}
     for playlist in document["Playlists"]:
         for ref in playlist.get("Playlist Items", []):
             assert ref["Track ID"] in track_ids
+
+
+def test_m3u_import_to_itunes_export_needs_no_nml_configuration(tmp_path: Path) -> None:
+    (tmp_path / "in").mkdir()
+    _write_m3u_fixture(tmp_path)
+    config_path = tmp_path / "traktor-m3u-sync.toml"
+    config_path.write_text(
+        f'[store]\npath = "{tmp_path / "store.db"}"\n\n'
+        f'[m3u]\nlibrary_root = "../music"\nimport_dir = "{tmp_path / "in"}"\n\n'
+        f'[itunes]\noutput_file = "{tmp_path / "iTunes Music Library.xml"}"\n'
+        'location_base = "file://localhost/M:/Music"\n'
+        f'check_base_path = "{tmp_path / "music"}"\n',
+        encoding="utf-8",
+    )
+
+    imported = RUNNER.invoke(
+        app, ["import", "--format", "m3u", "--config", str(config_path)], catch_exceptions=False
+    )
+    exported = RUNNER.invoke(
+        app, ["export", "--format", "itunes", "--config", str(config_path)], catch_exceptions=False
+    )
+
+    assert imported.exit_code == 0
+    assert exported.exit_code == 0
+    document = plistlib.load((tmp_path / "iTunes Music Library.xml").open("rb"))
+    assert {entry["Location"] for entry in document["Tracks"].values()} == {
+        "file://localhost/M:/Music/House/track-one.mp3",
+        "file://localhost/M:/Music/techno/track-two.mp3",
+    }
+    assert document["Music Folder"] == "file://localhost/M:/Music/"
 
 
 def test_itunes_import_is_unsupported(tmp_path: Path) -> None:
@@ -352,6 +484,33 @@ def test_itunes_export_requires_configured_fields(tmp_path: Path) -> None:
 
     assert result.exit_code == 1
     assert "output_file is required for iTunes export" in result.stderr
+
+
+def test_cli_itunes_export_accepts_base_overrides(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, with_itunes=False)
+    run_import(load_config(_write_config(tmp_path)), "m3u")
+
+    result = RUNNER.invoke(
+        app,
+        [
+            "export",
+            "--format",
+            "itunes",
+            "--config",
+            str(config_path),
+            "--output-file",
+            str(tmp_path / "cli.xml"),
+            "--location-base",
+            "file://localhost/M:/Music",
+            "--check-base-path",
+            str(tmp_path / "music"),
+        ],
+    )
+
+    assert result.exit_code == 0
+    document = plistlib.load((tmp_path / "cli.xml").open("rb"))
+    assert document["Music Folder"] == "file://localhost/M:/Music/"
+    assert "WARNING code=file_missing" not in result.stderr
 
 
 def test_itunes_export_fails_fast_on_empty_store(tmp_path: Path) -> None:
@@ -373,7 +532,7 @@ def test_load_config_without_itunes_section(tmp_path: Path) -> None:
 def test_itunes_export_overrides_validate_and_win(tmp_path: Path) -> None:
     bare = load_config(_write_config(tmp_path, with_itunes=False))
 
-    with pytest.raises(ConfigError, match="base_path is required for iTunes export"):
+    with pytest.raises(ConfigError, match="location_base is required for iTunes export"):
         apply_export_overrides(bare, format="itunes", output_file=tmp_path / "x.xml")
 
     config = load_config(_write_config(tmp_path))
@@ -381,10 +540,12 @@ def test_itunes_export_overrides_validate_and_win(tmp_path: Path) -> None:
         config,
         format="itunes",
         output_file=tmp_path / "other.xml",
-        base_path=tmp_path / "other-music",
+        location_base="file://localhost/M:/Other",
+        check_base_path=tmp_path / "other-music",
     )
     assert overridden.itunes.output_file == tmp_path / "other.xml"
-    assert overridden.itunes.base_path == tmp_path / "other-music"
+    assert overridden.itunes.location_base == "file://localhost/M:/Other"
+    assert overridden.itunes.check_base_path == tmp_path / "other-music"
     assert overridden.m3u.output_dir == tmp_path / "out"
 
 
@@ -395,30 +556,31 @@ def test_m3u_and_nml_commands_ignore_missing_itunes(tmp_path: Path) -> None:
     assert apply_export_overrides(config, format="nml").itunes == ItunesConfig()
 
 
-def test_itunes_export_rejects_relative_base_path(tmp_path: Path) -> None:
+def test_itunes_export_rejects_relative_location_base(tmp_path: Path) -> None:
     config_path = tmp_path / "traktor-m3u-sync.toml"
-    config_path.write_text(_config_text(tmp_path, base_path="music"), encoding="utf-8")
+    config_path.write_text(_config_text(tmp_path, location_base="music"), encoding="utf-8")
     config = load_config(config_path)
 
-    assert config.itunes.base_path == Path("music")
-    with pytest.raises(ConfigError, match="base_path must be an absolute path"):
+    assert config.itunes.location_base == "music"
+    with pytest.raises(ConfigError, match="absolute file: URI"):
         apply_export_overrides(config, format="itunes")
-    assert apply_export_overrides(config, format="m3u").itunes.base_path == Path("music")
+    assert apply_export_overrides(config, format="m3u").itunes.location_base == "music"
 
 
-def test_itunes_export_rejects_relative_base_path_override(tmp_path: Path) -> None:
+def test_itunes_export_rejects_relative_location_base_override(tmp_path: Path) -> None:
     config = load_config(_write_config(tmp_path))
 
-    with pytest.raises(ConfigError, match="base_path must be an absolute path"):
-        apply_export_overrides(config, format="itunes", base_path=Path("other-music"))
+    with pytest.raises(ConfigError, match="absolute file: URI"):
+        apply_export_overrides(config, format="itunes", location_base="M:/Music")
 
 
-def test_itunes_export_accepts_absolute_base_path(tmp_path: Path) -> None:
+def test_itunes_export_accepts_file_uri_location_base(tmp_path: Path) -> None:
     config = load_config(_write_config(tmp_path))
 
     resolved = apply_export_overrides(config, format="itunes")
 
-    assert resolved.itunes.base_path == tmp_path / "music"
+    assert resolved.itunes.location_base == "file://localhost/M:/Music"
+    assert resolved.itunes.check_base_path == tmp_path / "music"
     assert resolved.itunes.output_file == tmp_path / "out" / "iTunes Music Library.xml"
 
 
@@ -432,7 +594,7 @@ def test_itunes_export_replaces_existing_target_without_temp_leftovers(tmp_path:
     output = target_dir / "Library.xml"
     output.write_bytes(b"stale")
 
-    ItunesExporter(base, output).write((_playlist(base, rel="House/track.mp3"),))
+    ItunesExporter(_locations(base), output).write((_playlist(base, rel="House/track.mp3"),))
 
     assert plistlib.load(output.open("rb"))["Major Version"] == 1
     assert [p.name for p in target_dir.iterdir()] == ["Library.xml"]
@@ -453,7 +615,7 @@ def test_itunes_write_failure_leaves_existing_target_unchanged(
     monkeypatch.setattr("os.replace", failing_replace)
 
     with pytest.raises(OSError, match="no space"):
-        ItunesExporter(base, output).write((_playlist(base, rel="House/track.mp3"),))
+        ItunesExporter(_locations(base), output).write((_playlist(base, rel="House/track.mp3"),))
 
     assert output.read_bytes() == b"stale"
     assert [p.name for p in target_dir.iterdir()] == ["Library.xml"]
@@ -481,6 +643,10 @@ def _library(tmp_path: Path) -> Path:
     base = tmp_path / "music"
     base.mkdir(exist_ok=True)
     return base
+
+
+def _locations(base: Path) -> FileUriMapping:
+    return FileUriMapping(f"file://{base}")
 
 
 def _resolved_track(
@@ -513,7 +679,7 @@ def _playlist(
 
 def _export(base: Path, playlists: tuple[Playlist, ...], tmp_path: Path) -> dict[str, Any]:
     output = tmp_path / "Library.xml"
-    ItunesExporter(base, output).write(playlists)
+    ItunesExporter(_locations(base), output, base).write(playlists)
     return plistlib.load(output.open("rb"))
 
 
@@ -523,32 +689,36 @@ def _xml(tmp_path: Path) -> str:
 
 def _app_config(tmp_path: Path) -> AppConfig:
     return AppConfig(
-        library=LibraryConfig(
-            traktor_root=PureWindowsPath("C:/Music"),
-            m3u_root=PurePosixPath("../music"),
-        ),
         store=StoreConfig(path=tmp_path / "store.db"),
-        nml=NmlConfig(collection_path=tmp_path / "collection.nml"),
-        m3u=M3uConfig(output_dir=tmp_path / "out", import_dir=tmp_path / "in"),
+        nml=NmlConfig(
+            library_root=PureWindowsPath("C:/Music"), collection_path=tmp_path / "collection.nml"
+        ),
+        m3u=M3uConfig(
+            library_root=PurePosixPath("../music"),
+            output_dir=tmp_path / "out",
+            import_dir=tmp_path / "in",
+        ),
         itunes=ItunesConfig(
             output_file=tmp_path / "out" / "iTunes Music Library.xml",
-            base_path=tmp_path / "music",
+            location_base="file://localhost/M:/Music",
+            check_base_path=tmp_path / "music",
         ),
     )
 
 
-def _config_text(tmp_path: Path, *, with_itunes: bool = True, base_path: str | None = None) -> str:
+def _config_text(
+    tmp_path: Path, *, with_itunes: bool = True, location_base: str = "file://localhost/M:/Music"
+) -> str:
     text = (
-        f'[library]\ntraktor_root = "C:/Music"\nm3u_root = "../music"\n\n'
         f'[store]\npath = "{tmp_path / "store.db"}"\n\n'
-        f'[nml]\ncollection_path = "{tmp_path / "collection.nml"}"\n\n'
-        f'[m3u]\noutput_dir = "{tmp_path / "out"}"\nimport_dir = "{tmp_path / "in"}"\n'
+        f'[nml]\nlibrary_root = "C:/Music"\ncollection_path = "{tmp_path / "collection.nml"}"\n\n'
+        f'[m3u]\nlibrary_root = "../music"\n'
+        f'output_dir = "{tmp_path / "out"}"\nimport_dir = "{tmp_path / "in"}"\n'
     )
     if with_itunes:
-        configured = tmp_path / "music" if base_path is None else base_path
         text += (
             f'\n[itunes]\noutput_file = "{tmp_path / "out" / "iTunes Music Library.xml"}"\n'
-            f'base_path = "{configured}"\n'
+            f'location_base = "{location_base}"\ncheck_base_path = "{tmp_path / "music"}"\n'
         )
     return text
 

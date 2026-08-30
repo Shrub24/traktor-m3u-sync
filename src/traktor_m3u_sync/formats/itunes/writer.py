@@ -6,7 +6,6 @@ import plistlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Final
 
 APPLICATION_NAME: Final[str] = "traktor-m3u-sync"
@@ -38,7 +37,7 @@ class ItunesPlaylistEntry:
 def build_document(
     tracks: Sequence[ItunesTrack],
     playlists: Sequence[ItunesPlaylistEntry],
-    base_path: Path,
+    music_folder: str,
     date: datetime,
     library_persistent_id: str,
 ) -> dict[str, Any]:
@@ -47,7 +46,7 @@ def build_document(
         "Minor Version": MINOR_VERSION,
         "Application Version": APPLICATION_NAME,
         "Date": date,
-        "Music Folder": _music_folder(base_path),
+        "Music Folder": music_folder,
         "Library Persistent ID": library_persistent_id,
         "Tracks": {str(track.track_id): _track_dict(track) for track in tracks},
         "Playlists": [_playlist_dict(entry) for entry in playlists],
@@ -56,11 +55,6 @@ def build_document(
 
 def render_document(document: dict[str, Any]) -> bytes:
     return plistlib.dumps(document, fmt=plistlib.FMT_XML)
-
-
-def _music_folder(base_path: Path) -> str:
-    uri = base_path.as_uri()
-    return uri if uri.endswith("/") else f"{uri}/"
 
 
 def _track_dict(track: ItunesTrack) -> dict[str, Any]:

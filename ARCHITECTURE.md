@@ -11,7 +11,7 @@ The system is a hub-and-spoke bridge. The hub is a format-neutral playlist model
 1. **Model (`model/`)** — frozen playlist/track dataclasses with identity normalization: a track's identity is its casefolded POSIX library-relative path, with an artist+title fallback only for entries that have no resolvable path (ambiguous fallbacks warn; unresolvable entries are stored flagged, never dropped).
 2. **Store (`store/`)** — SQLite (stdlib `sqlite3`) cache at `[store].path`. Rebuildable, disposable state: every import performs a wholesale wipe-and-rebuild in one transaction. A `meta` table carries the schema version; mismatches fail fast with a re-import directive — there are no migrations.
 3. **Format adapters (`formats/<fmt>/`)** — per format, an `Importer` (`read(source) -> ImportResult`) and/or `Exporter` (`write(playlists, target) -> ExportResult`) plus format-internal helpers. Adapters emit shared structured warning/result types and hold no cross-format knowledge.
-4. **Paths (`paths/`)** — path-bearing formats use a `PathMapping` to translate native forms (Traktor `VOLUME`/`DIR`/`FILE`/`PRIMARYKEY`, M3U relative/absolute) to and from library-relative identity space.
+4. **Paths (`paths/`)** — each path-bearing format owns its mapping: `[nml].library_root` and `[m3u].library_root` translate native forms (Traktor `VOLUME`/`DIR`/`FILE`/`PRIMARYKEY`, M3U relative/absolute) to and from library-relative identity space, and a pure `file:` URI mapping renders consumer-facing iTunes Locations from `[itunes].location_base` independent of the worker filesystem.
 5. **Services (`services/`)** — thin orchestration only: resolve config, select the format's adapter, run it, rebuild or read the store, summarize. Format selection is a registry lookup.
 6. **CLI (`cli.py`)** — `import --format nml|m3u` (source → store) and `export --format nml|m3u|itunes` (store → target). Export reads only the store and fails fast when it is empty or uninitialized.
 
@@ -29,7 +29,9 @@ Adding a format means one adapter package and any required path mapping or confi
 - Missing import matches are skipped and reported.
 - Exported playlists use UTF-8 `.m3u8`.
 - Durations are stored in seconds; adapters convert native units (Traktor `PLAYTIME` is milliseconds) at the boundary.
-- TOML is the configuration format, with format-based sections (`[library]`, `[store]`, `[nml]`, `[m3u]`, `[itunes]`) and per-command CLI overrides.
+- TOML is the configuration format, with format-based sections (`[store]`, `[nml]`, `[m3u]`, `[itunes]`) and per-command CLI overrides. There is no global `[library]` table (retired by `format-path-mappings`).
+- Library roots belong to their format: `[nml].library_root` and `[m3u].library_root`, each required only when a command selects that format; unselected adapters impose no configuration.
+- iTunes Locations and Music Folder render from `[itunes].location_base`, a complete consumer-facing absolute `file:` URI (empty, `localhost`, and UNC authorities supported; UTF-8 percent-encoding preserving `/` and drive colons). Optional `[itunes].check_base_path` is a worker-side local path used only for file-missing warnings, never for Locations.
 - `traktor-nml-utils` (v4.0.0+) is the primary NML parsing library. It uses xsdata-generated dataclasses that model the full NML schema (entries, locations, cues, playlists, etc.). If xsdata write round-tripping proves fragile, fall back to direct `lxml` writes using the same models as reference.
 - The sync worker runs on Linux/NixOS; the Traktor import target is Windows-first.
 - Path mappings are configurable in design, even if the first deployment uses a fixed mapping.
