@@ -58,15 +58,12 @@ Sub-areas:
 
 **Completed OpenSpec changes:**
 - `deployment-packaging` — Nix runtime package, app output, NixOS module with declarative config and separate export/import services
-
-**Completed OpenSpec changes:**
 - `playlist-store` — hub-and-spoke pivot: internal model, SQLite store, adapter contract, format-based config, store-mediated CLI (see ARCHITECTURE.md)
-
-**In-progress OpenSpec changes:**
 - `itunes-export` — store-to-iTunes XML exporter, including NixOS export service support
 - `format-path-mappings` — **breaking config migration**: `[library]` removed in favor of `[nml].library_root` / `[m3u].library_root`; `[itunes].base_path` replaced by consumer-facing `location_base` (full `file:` URI, e.g. `file://localhost/M:/Music`) plus optional worker-side `check_base_path` for missing-file warnings
+- `sync-operations` — atomic publish, export dry-run, and `--fail-on-warning` operational contract
 
-**Planned OpenSpec changes:** `sync-config`, `sync-reporting` (split as needed)
+**Planned OpenSpec changes:** `sync-config`, `sync-reporting` (split as needed) — next candidate is Engine DJ adapter; `homelab-automation` (timers, path hooks) stays downstream policy
 
 Sub-areas:
 - config ergonomics: format-owned path mappings, CLI overrides, selected-format validation
