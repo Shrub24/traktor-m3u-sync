@@ -66,7 +66,11 @@ def read_import_tree(root: Path) -> tuple[ParsedPlaylist, ...]:
     if not root.is_dir():
         raise M3uReadError(f"Import directory does not exist: {root}")
 
-    m3u_paths = sorted(path for path in root.rglob("*.m3u8") if path.is_file())
+    m3u_paths = sorted(
+        path
+        for path in root.rglob("*")
+        if path.is_file() and path.suffix.lower() in (".m3u", ".m3u8")
+    )
     playlists: list[ParsedPlaylist] = []
 
     for m3u_path in m3u_paths:

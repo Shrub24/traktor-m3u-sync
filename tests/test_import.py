@@ -111,6 +111,15 @@ def test_read_import_tree_handles_flat_directory(tmp_path: Path) -> None:
     assert all(p.relative_dir == Path(".") for p in playlists)
 
 
+def test_read_import_tree_discovers_plain_m3u_files(tmp_path: Path) -> None:
+    (tmp_path / "Mix.m3u").write_text("#EXTM3U\n../music/track.mp3\n", encoding="utf-8")
+
+    playlists = read_import_tree(tmp_path)
+
+    assert len(playlists) == 1
+    assert playlists[0].name == "Mix"
+
+
 # ── M3U path mapping tests ──────────────────────────────────────────────
 
 
