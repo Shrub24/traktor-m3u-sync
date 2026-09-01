@@ -41,8 +41,11 @@ All options live under `services.traktor-m3u-sync.*`.
 | `itunes.output_file` | null/string | `null` | iTunes Music Library XML output path; required for `export.format = "itunes"` |
 | `itunes.location_base` | null/string | `null` | Complete absolute `file:` URI for iTunes track Locations; required for `export.format = "itunes"` |
 | `itunes.check_base_path` | null/string | `null` | Optional local worker path for iTunes missing-file warnings |
+| `engine.database_path` | null/string | `null` | Existing Engine DJ media database (`m.db`); required for `export.format = "engine"` |
+| `engine.track_path_prefix` | string | `".."` | Prefix prepended to store-relative track paths when matching Engine `Track` rows |
+| `engine.managed_root` | string | `"Playlist Sync"` | Top-level Engine playlist subtree the export owns |
 | `export.enable` | bool | `false` | Enable the export oneshot service |
-| `export.format` | null/`"nml"`/`"m3u"`/`"itunes"` | `null` | Export target format, passed as `--format` (required when enabled) |
+| `export.format` | null/`"nml"`/`"m3u"`/`"itunes"`/`"engine"` | `null` | Export target format, passed as `--format` (required when enabled) |
 | `export.extraArgs` | list of strings | `[]` | Extra CLI arguments appended after `--format` and `--config` |
 | `import.enable` | bool | `false` | Enable the import oneshot service |
 | `import.format` | null/`"nml"`/`"m3u"` | `null` | Import source format, passed as `--format` (required when enabled) |
@@ -55,11 +58,13 @@ services, `m3u.library_root` only for `m3u` services, and iTunes requires
 The URI may use an empty, `localhost`, or hostname (UNC) authority; whitespace,
 malformed percent escapes, queries, and fragments are rejected during evaluation.
 `check_base_path` is optional and is used only for local worker warnings.
-`itunes` is export-only; `import.format` accepts only `nml` and `m3u`.
+Engine requires an existing `database_path` only for Engine export; the prefix and
+managed root have defaults.
+`itunes` and `engine` are export-only; `import.format` accepts only `nml` and `m3u`.
 
 The module creates the product-neutral `playlist-sync` system user and group by default, then runs both oneshots under that identity. NixOS allocates the numeric UID/GID and assigns its standard `nologin` shell. Keep both defaults together; custom `user` and `group` names must also be supplied together and are treated as operator-managed. Set both to `null` only as an explicit root escape hatch. Generated configuration requires an explicit `store.path` when running non-root because the CLI's home-relative fallback is not writable by the system account.
 
-Before starting a service, grant its identity access to every configured path. The import service needs read access to `m3u.import_dir` and write access to the store parent; exports need write access to their target. Prefer directory ownership or `supplementaryGroups = [ "media" ]`; don't replace only the default primary group. The base module deliberately does not hard-code homelab paths or `ReadOnlyPaths=`/`ReadWritePaths=` sandbox policy.
+Before starting a service, grant its identity access to every configured path. The import service needs read access to `m3u.import_dir` and write access to the store parent; exports need write access to their target. An Engine export also needs create and rename access to the directory holding `engine.database_path`, because staging, the adjacent backup, and the rollback journal all live there. Prefer directory ownership or `supplementaryGroups = [ "media" ]`; don't replace only the default primary group. The base module deliberately does not hard-code homelab paths or `ReadOnlyPaths=`/`ReadWritePaths=` sandbox policy, and it never creates, chowns, or grants access to a configured Engine database.
 
 The module creates two systemd oneshot services:
 
@@ -98,6 +103,8 @@ Grant the resulting identity filesystem access before starting the units. For ex
 - write/execute access to the parent of `store.path` and `itunes.output_file`;
 - any parent-directory traversal permissions required to reach those paths.
 
+An Engine deployment additionally needs read/write plus create-and-rename access to the directory containing `engine.database_path`. The module never creates, chowns, or opens up that path; own it in the host configuration. Atomic publication replaces the inode, so the published database is owned by the service identity and gets its group from the target directory. Use an SGID directory, shared group, or ACL that keeps the file accessible to Engine.
+
 The module does not change ownership of arbitrary runtime paths. Use declarative directory ownership, group permissions, or ACLs in the host configuration. `ReadOnlyPaths=` and `ReadWritePaths=` are optional systemd sandbox restrictions, not permission grants; configure them downstream using the host's real paths.
 
 Use root only as an explicit escape hatch:
@@ -109,12 +116,57 @@ services.traktor-m3u-sync = {
 };
 ```
 
+### Engine export
+
+Engine DJ 5.0 stores playlists in SQLite, so `export.format = "engine"` rebuilds one managed
+playlist subtree inside the media-drive database instead of writing a file. Only that subtree is
+touched: unrelated Engine playlists survive, and tracks are matched against `Track` rows Engine
+already discovered — the export never inserts tracks and never changes analysis, cues, artwork,
+or tags. v1 writes only the database in `engine.database_path`; the L: main-library database is
+not mirrored.
+
+```nix
+services.traktor-m3u-sync = {
+  enable = true;
+  store.path = "/var/lib/playlist-sync/store.db";
+  engine.database_path = "/mnt/engine/Engine Library/Database2/m.db";
+  export = {
+    enable = true;
+    format = "engine";
+  };
+};
+```
+
+Engine DJ must be closed for the whole run; the Windows VM may remain running. The export
+rejects a non-empty `-journal` sidecar and any `-wal`/`-shm` sidecar before writing, but no
+check can prove the player is closed, so treat closing it as an operator precondition. The
+target must already exist with Engine schema 3.0.2 in rollback-journal (`DELETE`) mode.
+
+Safe order:
+
+1. Close Engine DJ (or stop its Windows VM); leave the media database reachable but idle.
+2. Rehearse: `traktor-m3u-sync export --format engine --dry-run`. This runs the real exporter
+   against a temporary copy of the database; the configured target and its backup stay untouched.
+   The oneshot equivalent is `export.extraArgs = [ "--dry-run" ]`.
+3. Run the export (start the unit, or `traktor-m3u-sync export --format engine`).
+4. Inspect the summary: matched tracks, playlists, and memberships, plus each skip warning.
+   Skips are expected when Engine has not discovered a track yet.
+5. Open Engine DJ and verify the managed root against the source playlists.
+
+Every real run leaves the prior database at the deterministic sibling
+`<database name>.playlist-sync.bak` (one generation, kept after success), refreshed atomically
+before the validated stage replaces the target. A validation failure after that replacement
+restores the backup automatically. Undoing a completed run is the operator's own step: keep
+Engine offline and publish the retained backup over the target the same way, as a same-directory
+atomic replacement.
+VM lifecycle, mounting, and any longer backup retention stay downstream policy.
+
 ## Config file override
 
 When `configFile` is set, the module uses the external TOML file directly
 instead of generating one from Nix options. In that mode:
 
-- `store.*`, `nml.*`, `m3u.*`, and `itunes.*` Nix options are not rendered
+- `store.*`, `nml.*`, `m3u.*`, `itunes.*`, and `engine.*` Nix options are not rendered
   into any config file; the generated-config assertions are skipped
 - The runtime workflow values come entirely from the external file
 - `export.format` / `import.format` are still required (passed as `--format`)
@@ -154,6 +206,9 @@ completed-with-warnings runs. Status `1` still means a real failure and
 status `0` means success (with or without warnings when the flag is absent).
 
 ### Export timer (daily at 03:00)
+
+Use unattended timers only for formats safe to run without coordination.
+Engine export still requires Engine DJ to be closed; stopping the VM is optional.
 
 ```nix
 systemd.timers.traktor-m3u-sync-export = {

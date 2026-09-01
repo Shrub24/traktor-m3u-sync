@@ -1,14 +1,15 @@
 # traktor-m3u-sync
 
 CLI worker for synchronizing Traktor Pro playlist collections (`collection.nml`) and standard
-UTF-8 `.m3u8` playlists through a local store, with additional export to iTunes XML for DJ software.
+UTF-8 `.m3u8` playlists through a local store, with additional export to iTunes XML and an
+Engine DJ media database for DJ software.
 
 ## Status
 
 **Store-mediated bridge** — every format talks to one internal playlist model through adapters:
 
 ```
-collection.nml ──import──▶ SQLite store ──export──▶ .m3u8 / iTunes XML
+collection.nml ──import──▶ SQLite store ──export──▶ .m3u8 / iTunes XML / Engine m.db
        .m3u8   ──import──▶            ◀──export──  collection.nml
 ```
 
@@ -19,6 +20,8 @@ re-import at any time.
 Current limitations:
 
 - smartlists are skipped with warnings during NML import
+- Engine export is M-only: it writes one media-drive `m.db` and mirrors no L: main-library database
+- Engine export only references tracks Engine already discovered; it never inserts tracks or changes analysis
 - sanitized-name mismatch is a documented limitation (original names are not restored on import)
 - reporting is structured stdout/stderr only for now
 - no incremental sync; every import replaces the whole snapshot
@@ -60,6 +63,11 @@ import_dir = "/path/to/incoming"                    # required for `import --for
 output_file = "/path/to/iTunes Music Library.xml"   # required for `export --format itunes`
 location_base = "file://localhost/M:/Music"         # consumer-facing library root as a full `file:` URI, ditto
 check_base_path = "/path/to/music"                  # optional worker mount, used only for file-missing warnings
+
+[engine]
+database_path = "/path/to/Engine Library/Database2/m.db"  # existing Engine DJ 5.0 media database; required for `export --format engine`
+track_path_prefix = ".."                            # optional, this is the default; prepended to store-relative paths when matching tracks
+managed_root = "Playlist Sync"                      # optional, this is the default; the only playlist subtree export owns
 ```
 
 > **Breaking migration (format-path-mappings):** the global `[library]` table is gone — move
@@ -80,6 +88,7 @@ traktor-m3u-sync import --format m3u --config traktor-m3u-sync.toml
 traktor-m3u-sync export --format m3u --config traktor-m3u-sync.toml
 traktor-m3u-sync export --format nml --config traktor-m3u-sync.toml
 traktor-m3u-sync export --format itunes --config traktor-m3u-sync.toml
+traktor-m3u-sync export --format engine --config traktor-m3u-sync.toml
 ```
 
 Per-command overrides:
@@ -101,6 +110,12 @@ traktor-m3u-sync export --format itunes \
   --output-file "/path/to/iTunes Music Library.xml" \
   --location-base "file://localhost/M:/Music" \
   --check-base-path /path/to/music
+
+traktor-m3u-sync export --format engine \
+  --config traktor-m3u-sync.toml \
+  --engine-database "/mnt/engine/Engine Library/Database2/m.db" \
+  --engine-track-prefix ".." \
+  --engine-managed-root "Playlist Sync"
 ```
 
 A store written by an older schema version is rejected with a structured error pointing at
@@ -110,9 +125,9 @@ re-import; there are no migrations.
 
 - `export --dry-run` (all formats): validates config and store state, then runs the real
   exporter against isolated temporary targets — a temporary directory (M3U), a temporary XML
-  file (iTunes), or a temporary copy of the collection (NML). Output, warnings, and the
-  summary are identical to a real run; the configured target, the NML collection, and the
-  store are left unchanged.
+  file (iTunes), a temporary copy of the collection (NML), or a temporary copy of the database
+  (Engine). Output, warnings, and the summary are identical to a real run; the configured
+  target, any backup beside it, and the store are left unchanged.
 - `--fail-on-warning` (import and export, opt-in): the command still prints its normal
   summary and warnings, then exits `2` when at least one warning was emitted.
 
@@ -121,14 +136,15 @@ with warnings under `--fail-on-warning`.
 
 M3U and iTunes generated targets are published atomically: each write goes to a same-directory
 temporary file and only replaces the target after serialization succeeds. A failed write leaves
-a prior target byte-for-byte unchanged and removes its temporary file.
+a prior target byte-for-byte unchanged and removes its temporary file. Engine publication is
+stricter because its target is not disposable; see below.
 
 ## Deployment (Nix)
 
 The flake exposes a runtime package, an app shortcut, and a NixOS module.
 See [docs/nix-deployment.md](docs/nix-deployment.md) for the full Nix reference
-(flake outputs, module options, configFile behavior, systemd timer examples,
-and `traktor-nml-utils` packaging notes).
+(flake outputs, module options, the Engine export run order, configFile behavior,
+systemd timer examples, and `traktor-nml-utils` packaging notes).
 
 ### Build the package
 
@@ -232,6 +248,30 @@ its own; operators that want warning-sensitive oneshots override the service
 - skips unmatched tracks with structured warnings rather than failing
 - idempotent: running the same export twice produces the same result
 
+## Engine export behavior (`export --format engine`)
+
+Engine DJ 5.0 keeps playlists in SQLite, so this export mutates a database instead of writing a file.
+
+- requires Engine DJ closed; stopping the Windows VM is sufficient but not required. A non-empty
+  `-journal` sidecar or any `-wal`/`-shm` file fails the run before anything is written
+- targets only the media-drive database named by `[engine].database_path`; the L: main-library
+  database is never mirrored
+- matches store paths as `<track_path_prefix>/<store-relative-path>` against `Track` rows that
+  already exist in that database; missing, unresolved, ambiguous, and duplicate references warn
+  and skip instead of creating tracks
+- never creates a database or mutates Engine analysis, cues, waveforms, artwork, or tags
+- owns exactly one top-level subtree (`[engine].managed_root`), rebuilt idempotently while
+  unrelated Engine playlists stay untouched
+- requires schema 3.0.2 in rollback-journal (`DELETE`) mode; anything else fails before staging
+- publishes a mode-preserving same-directory stage: the current target is refreshed into the
+  adjacent `<database-name>.playlist-sync.bak` (one generation, retained on success), the stage
+  replaces the target atomically, and a post-publication validation failure restores that backup.
+  The published inode is owned by the worker identity and gets its group from the target directory
+
+Run order: close Engine DJ (or stop the VM) → `export --format engine --dry-run` → real export →
+check matched tracks, playlists, memberships, and skips in the summary → open Engine DJ. Rollback is
+the operator's own step against the retained backup, taken while Engine stays offline.
+
 ## Track identity
 
 - primary identity is the casefolded POSIX library-relative path
@@ -266,7 +306,8 @@ Store-mediated layers, each a dedicated module under `src/traktor_m3u_sync/`:
 3. **Store** — SQLite snapshot of imported playlists (schema-versioned, rebuildable)
 4. **Contracts** — importer/exporter protocols, path-mapping protocol, shared warning/result types
 5. **Paths** — adapter-owned roots translating native path spaces to/from library-relative paths, plus a consumer `file:` URI mapping for iTunes
-6. **Formats** — `nml` and `m3u` adapters (importer + exporter per format) plus the export-only `itunes` adapter
+6. **Formats** — `nml` and `m3u` adapters (importer + exporter per format) plus the export-only
+   `itunes` and `engine` adapters; `engine` writes into an existing database rather than a file
 7. **Services** — `run_import` / `run_export` orchestration and the CLI surface
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for full details and NML format notes.

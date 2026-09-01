@@ -11,14 +11,14 @@ from typing import Final, TypeVar
 
 from ..config import AppConfig, ConfigError
 from ..contracts import Exporter, Importer, ImportResult, SyncResult
-from ..formats import itunes, m3u, nml
+from ..formats import engine, itunes, m3u, nml
 from ..paths.m3u import M3uPathMapping
 from ..paths.traktor import TraktorPathMapping
 from ..paths.uri import FileUriMapping
 from ..store import PlaylistStore, StoreNotPopulatedError
 
 SUPPORTED_IMPORT_FORMATS: Final[tuple[str, ...]] = ("nml", "m3u")
-SUPPORTED_EXPORT_FORMATS: Final[tuple[str, ...]] = ("m3u", "nml", "itunes")
+SUPPORTED_EXPORT_FORMATS: Final[tuple[str, ...]] = ("m3u", "nml", "itunes", "engine")
 
 
 class UnknownFormatError(ValueError):
@@ -58,6 +58,14 @@ def _dry_run_config(config: AppConfig, format: str, sandbox: Path) -> AppConfig:
         return replace(config, m3u=replace(config.m3u, output_dir=sandbox / "m3u"))
     if format == "itunes":
         return replace(config, itunes=replace(config.itunes, output_file=sandbox / "Library.xml"))
+    if format == "engine":
+        database = _require(config.engine.database_path, "database_path")
+        # Guard the configured target before sandboxing: the copy alone would hide
+        # live Engine sidecars and a missing database would surface only as a temp path.
+        engine.preflight_target(database)
+        copy = sandbox / database.name
+        shutil.copy2(database, copy)
+        return replace(config, engine=replace(config.engine, database_path=copy))
     collection = _require(config.nml.collection_path, "collection_path")
     copy = sandbox / collection.name
     if collection.is_file():
@@ -118,6 +126,11 @@ _EXPORTERS: Final[Mapping[str, Callable[[AppConfig], Exporter]]] = {
         FileUriMapping(_require(config.itunes.location_base, "location_base")),
         _require(config.itunes.output_file, "output_file"),
         config.itunes.check_base_path,
+    ),
+    "engine": lambda config: engine.EngineExporter(
+        database_path=_require(config.engine.database_path, "database_path"),
+        track_path_prefix=config.engine.track_path_prefix,
+        managed_root=config.engine.managed_root,
     ),
 }
 

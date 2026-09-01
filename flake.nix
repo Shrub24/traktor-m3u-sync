@@ -92,14 +92,15 @@
                           library_root = "/mnt/music";
                           import_dir = "/mnt/playlists/import";
                         };
-                        itunes = {
-                          output_file = "/mnt/playlists/iTunes Music Library.xml";
-                          location_base = "file://localhost/M:/Music";
-                          check_base_path = "/mnt/music";
+                        engine = {
+                          database_path = "/mnt/engine/Engine Library/Database2/m.db";
+                          track_path_prefix = "../Music";
+                          managed_root = "Managed Engine Playlists";
                         };
                         export = {
                           enable = true;
-                          format = "itunes";
+                          format = "engine";
+                          extraArgs = [ "--fail-on-warning" ];
                         };
                         import = {
                           enable = true;
@@ -121,7 +122,7 @@
                         configFile = "/etc/traktor-m3u-sync/config with % percent.toml";
                         export = {
                           enable = true;
-                          format = "m3u";
+                          format = "engine";
                           extraArgs = [ "--fail-on-warning" ];
                         };
                         import = {
@@ -163,6 +164,52 @@
                     success = moduleFailing == [ ];
                     value = null;
                   };
+
+                engineMissingDatabaseEvaled =
+                  let
+                    evaled = nixpkgs.lib.nixosSystem {
+                      inherit (pkgs) system;
+                      modules = [
+                        self.nixosModules.traktor-m3u-sync
+                        {
+                          services.traktor-m3u-sync = {
+                            enable = true;
+                            package = traktor-m3u-sync;
+                            store.path = "/var/lib/traktor-m3u-sync/store.db";
+                            export = {
+                              enable = true;
+                              format = "engine";
+                            };
+                          };
+                        }
+                      ];
+                    };
+                    moduleFailing = builtins.filter (
+                      a: !a.assertion && nixpkgs.lib.hasPrefix "services.traktor-m3u-sync" a.message
+                    ) evaled.config.assertions;
+                  in
+                  {
+                    success = moduleFailing == [ ];
+                    value = null;
+                  };
+
+                engineImportEvaled = builtins.tryEval (
+                  (nixpkgs.lib.nixosSystem {
+                    inherit (pkgs) system;
+                    modules = [
+                      self.nixosModules.traktor-m3u-sync
+                      {
+                        services.traktor-m3u-sync = {
+                          enable = true;
+                          import = {
+                            enable = true;
+                            format = "engine";
+                          };
+                        };
+                      }
+                    ];
+                  }).config.services.traktor-m3u-sync.import.format
+                );
 
                 locationBaseEvaled =
                   location_base:
@@ -211,15 +258,17 @@
                 # Smoke-test: verify the module option surface exists and
                 # evaluates without error, the service ExecStart lines pass
                 # their declared --format and --config, and the generated
-                # TOML parses without an unselected NML section.
+                # TOML parses with only the selected Engine and M3U sections.
                 moduleSurfaceOk = cfg.enable == true;
                 exportExecOk =
-                  builtins.match ".*\"export\" \"--format\" \"itunes\" \"--config\" .*" exportService.serviceConfig.ExecStart
+                  builtins.match ".*\"export\" \"--format\" \"engine\" \"--config\" .* \"--fail-on-warning\"" exportService.serviceConfig.ExecStart
                   != null;
                 importExecOk =
                   builtins.match ".*\"import\" \"--format\" \"m3u\" \"--config\" .*" importService.serviceConfig.ExecStart
                   != null;
                 nmlRootValidationOk = !nmlMissingRootEvaled.success;
+                engineDatabaseValidationOk = !engineMissingDatabaseEvaled.success;
+                engineImportRejected = !engineImportEvaled.success;
                 validLocationBasesOk = nixpkgs.lib.all (location_base: (locationBaseEvaled location_base).success) [
                   "file:///srv/music"
                   "file://localhost/M:/Music"
@@ -239,7 +288,7 @@
                       "file:///srv/café"
                     ];
                 externalExportExecOk =
-                  builtins.match ".*\"export\" \"--format\" \"m3u\" \"--config\" \"/etc/traktor-m3u-sync/config with %% percent.toml\" \"--fail-on-warning\"" externalExportService.serviceConfig.ExecStart
+                  builtins.match ".*\"export\" \"--format\" \"engine\" \"--config\" \"/etc/traktor-m3u-sync/config with %% percent.toml\" \"--fail-on-warning\"" externalExportService.serviceConfig.ExecStart
                   != null;
                 externalImportExecOk =
                   builtins.match ".*\"import\" \"--format\" \"m3u\" \"--config\" \"/etc/traktor-m3u-sync/config with %% percent.toml\" \"--fail-on-warning\"" externalImportService.serviceConfig.ExecStart
@@ -256,6 +305,17 @@
 
                 echo "module-eval: checking import service ExecStart"
                 ${if importExecOk then "" else "echo 'FAIL: import ExecStart missing expected pattern'; exit 1"}
+
+                echo "module-eval: checking Engine database validation"
+                ${
+                  if engineDatabaseValidationOk then
+                    ""
+                  else
+                    "echo 'FAIL: Engine export accepted missing database_path'; exit 1"
+                }
+
+                echo "module-eval: checking Engine import rejection"
+                ${if engineImportRejected then "" else "echo 'FAIL: import format accepted engine'; exit 1"}
 
                 echo "module-eval: checking NML root validation"
                 ${
@@ -292,15 +352,29 @@
                     "echo 'FAIL: import ExecStart lost config or extra argument boundaries'; exit 1"
                 }
 
+                echo "module-eval: checking rendered Engine TOML"
+                config_file=$(echo '${exportService.serviceConfig.ExecStart}' | sed 's/.*"--config" "\([^"]*\)".*/\1/')
+                config_toml=$(< "$config_file")
+                case "$config_toml" in
+                  *'[itunes]'* | *'[nml]'*)
+                    echo 'FAIL: generated TOML contains an unselected format section'
+                    exit 1
+                    ;;
+                  *'[engine]'*'database_path = "/mnt/engine/Engine Library/Database2/m.db"'*'managed_root = "Managed Engine Playlists"'*'track_path_prefix = "../Music"'*'[m3u]'*) ;;
+                  *)
+                    echo 'FAIL: generated TOML missing expected Engine settings'
+                    exit 1
+                    ;;
+                esac
+
                 echo "module-eval: checking rendered TOML against packaged CLI loader"
-                config_file=$(echo '${importService.serviceConfig.ExecStart}' | sed 's/.*"--config" "\([^"]*\)".*/\1/')
-                if traktor-m3u-sync export --format itunes --config "$config_file" > loader.out 2>&1; then
+                if traktor-m3u-sync export --format engine --config "$config_file" > loader.out 2>&1; then
                   echo 'FAIL: packaged CLI unexpectedly succeeded without the fixture store'
                   exit 1
                 fi
                 case "$(< loader.out)" in
                   *'ERROR code=config_error'*)
-                    echo 'FAIL: generated M3U-to-iTunes config was rejected by the loader'
+                    echo 'FAIL: generated Engine config was rejected by the loader'
                     exit 1
                     ;;
                 esac

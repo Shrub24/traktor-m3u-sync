@@ -42,3 +42,16 @@ location_base = "file://localhost/M:/Music"
 # Optional worker-side mount of the library, used only for file-missing warnings.
 # Locations are never derived from it; omit to skip local existence checks.
 # check_base_path = "/srv/music"
+
+[engine]
+# Existing Engine DJ 5.0 media-drive database to rebuild playlists in
+# (schema 3.0.2, rollback-journal mode, already populated by Engine).
+# Required only for `export --format engine`; Engine DJ must be stopped during the export.
+# The export writes a `<database name>.playlist-sync.bak` backup next to this file.
+database_path = "/path/to/Engine Library/Database2/m.db"
+
+# Prefix prepended to store-relative track paths when matching existing Engine tracks (default: "..")
+# track_path_prefix = ".."
+
+# Top-level Engine playlist subtree owned by exports, rebuilt on every run (default: "Playlist Sync")
+# managed_root = "Playlist Sync"

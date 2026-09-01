@@ -81,3 +81,48 @@ The NixOS module SHALL expose explicit import and export service argument option
 - **WHEN** an operator configures an external config file path containing spaces or percent characters with service extra arguments
 - **THEN** the generated import or export command preserves that path as one config argument
 - **AND** appends each extra argument without altering command argument boundaries
+
+### Requirement: Run services under a dedicated non-root identity
+The NixOS module SHALL run the import and export oneshot services under a configurable user and group whose default is a dedicated `playlist-sync` system account that the module creates automatically.
+
+#### Scenario: Default service identity
+- **WHEN** a NixOS configuration enables either traktor-m3u-sync service without setting `user` or `group`
+- **THEN** the module declares a `playlist-sync` system user and group with no login shell
+- **AND** both generated units set `User=` and `Group=` to that account
+
+#### Scenario: Operator-managed identity override
+- **WHEN** an operator points both `user` and `group` at a non-default account
+- **THEN** the generated units run as that identity
+- **AND** the module does not create a conflicting account
+
+#### Scenario: Shared media group access
+- **WHEN** an operator configures one or more supplementary groups
+- **THEN** both generated units add those groups through `SupplementaryGroups=`
+- **AND** the module does not hard-code a site-specific group
+
+#### Scenario: Generated config uses a writable explicit store
+- **WHEN** the generated module config runs under a non-root identity
+- **THEN** evaluation requires an explicit `store.path`
+- **AND** the service does not fall back to a home-relative path under `/var/empty`
+
+#### Scenario: Explicit root escape hatch
+- **WHEN** an operator sets `user = null`
+- **THEN** the module does not create the dedicated account or group
+- **AND** the generated units omit `User=` and `Group=`
+
+### Requirement: Expose Engine DJ export declaratively
+The NixOS module SHALL support Engine DJ on the export service only and SHALL render selected Engine settings into the same TOML contract consumed by the CLI.
+
+#### Scenario: Enable Engine export declaratively
+- **WHEN** a NixOS configuration selects engine export with a media database path, track path prefix, and managed-root name
+- **THEN** the module renders an `[engine]` TOML section
+- **AND** invokes `export --format engine` through the packaged CLI
+
+#### Scenario: Reject Engine import declaratively
+- **WHEN** an operator attempts to select engine as the import format
+- **THEN** Nix evaluation rejects the unsupported format
+
+#### Scenario: Generated Engine service configuration
+- **WHEN** the module generates Engine configuration rather than using `configFile`
+- **THEN** it validates the required Engine fields at evaluation time
+- **AND** does not create, chown, or grant access to the configured database path

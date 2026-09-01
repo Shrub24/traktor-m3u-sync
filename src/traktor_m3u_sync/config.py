@@ -12,6 +12,8 @@ from .paths.uri import FileUriError, FileUriMapping
 DEFAULT_CONFIG_PATH: Final = Path("traktor-m3u-sync.toml")
 DEFAULT_STORE_PATH: Final = Path("~/.local/state/traktor-m3u-sync/store.db")
 DEFAULT_SANDBOX_NAME: Final = "Imported Playlists"
+DEFAULT_ENGINE_TRACK_PATH_PREFIX: Final = ".."
+DEFAULT_ENGINE_MANAGED_ROOT: Final = "Playlist Sync"
 
 
 class ConfigError(RuntimeError):
@@ -50,11 +52,21 @@ class ItunesConfig:
 
 
 @dataclass(frozen=True)
+class EngineConfig:
+    # Required only for the Engine export command, validated per command.
+    # database_path must point at an existing Engine DJ media-drive m.db.
+    database_path: Path | None = None
+    track_path_prefix: str = DEFAULT_ENGINE_TRACK_PATH_PREFIX
+    managed_root: str = DEFAULT_ENGINE_MANAGED_ROOT
+
+
+@dataclass(frozen=True)
 class AppConfig:
     nml: NmlConfig
     store: StoreConfig = StoreConfig()
     m3u: M3uConfig = M3uConfig()
     itunes: ItunesConfig = ItunesConfig()
+    engine: EngineConfig = EngineConfig()
 
 
 def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
@@ -72,6 +84,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
     nml_table = _optional_table(raw, "nml")
     m3u_table = _optional_table(raw, "m3u")
     itunes_table = _optional_table(raw, "itunes")
+    engine_table = _optional_table(raw, "engine")
 
     nml_library_root = _optional_string(nml_table, "library_root", "nml")
     m3u_library_root = _optional_string(m3u_table, "library_root", "m3u")
@@ -94,6 +107,17 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
             output_file=_optional_path(itunes_table, "output_file", "itunes"),
             location_base=_optional_string(itunes_table, "location_base", "itunes"),
             check_base_path=_optional_path(itunes_table, "check_base_path", "itunes"),
+        ),
+        engine=EngineConfig(
+            database_path=_optional_path(engine_table, "database_path", "engine"),
+            track_path_prefix=(
+                _optional_string(engine_table, "track_path_prefix", "engine")
+                or DEFAULT_ENGINE_TRACK_PATH_PREFIX
+            ),
+            managed_root=(
+                _optional_string(engine_table, "managed_root", "engine")
+                or DEFAULT_ENGINE_MANAGED_ROOT
+            ),
         ),
     )
 
@@ -137,6 +161,9 @@ def apply_export_overrides(
     output_file: Path | None = None,
     location_base: str | None = None,
     check_base_path: Path | None = None,
+    engine_database: Path | None = None,
+    engine_track_prefix: str | None = None,
+    engine_managed_root: str | None = None,
 ) -> AppConfig:
     """Apply CLI overrides for `export` and validate what that command needs."""
     m3u = replace(config.m3u, output_dir=output_dir or config.m3u.output_dir)
@@ -172,12 +199,25 @@ def apply_export_overrides(
             FileUriMapping(itunes.location_base)
         except FileUriError as exc:
             raise ConfigError(str(exc)) from exc
+    engine = EngineConfig(
+        database_path=(
+            engine_database.expanduser() if engine_database else config.engine.database_path
+        ),
+        track_path_prefix=engine_track_prefix or config.engine.track_path_prefix,
+        managed_root=engine_managed_root or config.engine.managed_root,
+    )
+    if format == "engine" and engine.database_path is None:
+        raise ConfigError(
+            "database_path is required for Engine export: "
+            "pass --engine-database or set [engine].database_path"
+        )
     return replace(
         config,
         store=_override_store(config.store, store_path),
         nml=replace(nml, sandbox_name=sandbox_name or nml.sandbox_name),
         m3u=m3u,
         itunes=itunes,
+        engine=engine,
     )
 
 

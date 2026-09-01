@@ -59,7 +59,9 @@ def import_command(  # noqa: A001 - shadows built-in intentionally for CLI name
 
 @app.command()
 def export(
-    format: str = typer.Option(..., "--format", help="Target format: m3u, nml, itunes"),  # noqa: A002
+    format: str = typer.Option(  # noqa: A002
+        ..., "--format", help="Target format: m3u, nml, itunes, engine"
+    ),
     config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
     store: Path | None = typer.Option(None, "--store"),
     output_dir: Path | None = typer.Option(None, "--output-dir"),
@@ -75,6 +77,21 @@ def export(
         None,
         "--check-base-path",
         help="Local mount used only for missing-file warnings",
+    ),
+    engine_database: Path | None = typer.Option(
+        None,
+        "--engine-database",
+        help="Existing Engine DJ media database (m.db) target",
+    ),
+    engine_track_prefix: str | None = typer.Option(
+        None,
+        "--engine-track-prefix",
+        help="Engine track path prefix, default ..",
+    ),
+    engine_managed_root: str | None = typer.Option(
+        None,
+        "--engine-managed-root",
+        help="Owned Engine top-level playlist, default 'Playlist Sync'",
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Rehearse the export against isolated temporary targets"
@@ -97,6 +114,9 @@ def export(
             output_file=output_file,
             location_base=location_base,
             check_base_path=check_base_path,
+            engine_database=engine_database,
+            engine_track_prefix=engine_track_prefix,
+            engine_managed_root=engine_managed_root,
         ),
         config,
         fail_on_warning=fail_on_warning,

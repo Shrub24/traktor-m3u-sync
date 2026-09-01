@@ -4,7 +4,7 @@
 
 **Phases 0–2 are complete.** The repo has a working Nix-first Python 3.14 environment and store-mediated NML/M3U adapters.
 
-**Active: `itunes-export` — the first new target adapter.** The project is no longer a Traktor↔M3U point-to-point tool: an internal playlist model and rebuildable SQLite store are the hub; NML and M3U are adapters behind store-mediated `import --format <fmt>` / `export --format <fmt>` commands. iTunes XML is now an export target; Engine DJ remains deferred.
+Engine export is implemented and live-validated against Engine DJ 5.0: direct stdlib `sqlite3` writes one existing M: media-drive `m.db` (schema 3.0.2), matches existing Engine tracks only, owns one managed `Playlist Sync` subtree, and publishes only while Engine DJ is closed via stage, backup, validation, and atomic replacement. L: mirroring, track insertion, Engine import, and metadata enrichment remain deferred.
 
 Next up: **Phase 3 — Refinement and operational polish**.
 
@@ -62,10 +62,10 @@ Sub-areas:
 - `itunes-export` — store-to-iTunes XML exporter, including NixOS export service support
 - `format-path-mappings` — **breaking config migration**: `[library]` removed in favor of `[nml].library_root` / `[m3u].library_root`; `[itunes].base_path` replaced by consumer-facing `location_base` (full `file:` URI, e.g. `file://localhost/M:/Music`) plus optional worker-side `check_base_path` for missing-file warnings
 - `sync-operations` — atomic publish, export dry-run, and `--fail-on-warning` operational contract
+- `service-identity` — run NixOS oneshots under a neutral dedicated system user with configurable shared-group access
+- `engine-export` — M-only Engine DJ 5.0 playlist publication through a validated existing-track SQLite writer, retained backup, and atomic replacement; live-validated with twelve playlists and 1,085 ordered memberships
 
-**Active OpenSpec change:** `service-identity` — run NixOS oneshots under a neutral dedicated system user with configurable shared-group access
-
-**Planned OpenSpec changes:** `sync-config`, `sync-reporting` (split as needed) — next candidate is Engine DJ adapter; `homelab-automation` (timers, path hooks) stays downstream policy
+**Planned OpenSpec changes:** `sync-config`, `sync-reporting` (split as needed) — `homelab-automation` (timers, path hooks) stays downstream policy
 
 Sub-areas:
 - config ergonomics: format-owned path mappings, CLI overrides, selected-format validation
@@ -84,7 +84,8 @@ These are explicitly out of scope until Phases 1–3 prove the core loop:
 - Cue point / analysis metadata in custom M3U tags
 - Watch mode (inotify / systemd path units)
 - Cross-platform import targets (macOS)
-- Additional format adapters unlocked by `playlist-store`: Engine DJ, rekordbox
+- Additional format adapters unlocked by `playlist-store`: rekordbox
+- Engine DJ expansion beyond `engine-export` v1: L: main-library mirroring, track insertion/discovery, Engine import, and performance/metadata mutation
 
 ## Working assumptions
 

@@ -52,11 +52,16 @@ The system SHALL load store settings together with format-owned configuration se
 #### Scenario: iTunes export configuration
 - **WHEN** the user runs export with format itunes
 - **THEN** the command loads its settings from the `[itunes]` configuration section
-- **AND** the supported export formats include itunes alongside m3u and nml
+- **AND** the supported export formats include itunes and engine alongside m3u and nml
+
+#### Scenario: Engine export configuration
+- **WHEN** the user runs export with format engine
+- **THEN** the command loads `database_path`, `track_path_prefix`, and `managed_root` from the `[engine]` configuration section with any command-line overrides applied
+- **AND** does not enable engine as an import format
 
 #### Scenario: Unselected format configuration omitted
-- **WHEN** a command does not select NML
-- **THEN** it does not require NML path settings to load or run
+- **WHEN** a command does not select NML or Engine DJ
+- **THEN** it does not require NML or Engine DJ path settings to load or run
 
 ### Requirement: Support explicit operational command controls
 The system SHALL expose explicit command flags for operational behavior without changing the default import/export result contract.

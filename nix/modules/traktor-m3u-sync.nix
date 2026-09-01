@@ -3,7 +3,7 @@
 # Exposes two independent oneshot services (export and import) under
 # `services.traktor-m3u-sync`.  The module renders a TOML configuration
 # file from declarative Nix settings and invokes the CLI with
-# `export|import --format <nml|m3u|itunes> --config <path>`.
+# `export --format <nml|m3u|itunes|engine>` or `import --format <nml|m3u>`.
 #
 # Orchestration policy (timers, path triggers, Syncthing hooks) is
 # intentionally out of scope — attach downstream as needed.
@@ -31,6 +31,7 @@ let
     "nml"
     "m3u"
     "itunes"
+    "engine"
   ];
 
   nmlSelected =
@@ -40,6 +41,7 @@ let
     (cfg.export.enable && cfg.export.format == "m3u")
     || (cfg.import.enable && cfg.import.format == "m3u");
   itunesSelected = cfg.export.enable && cfg.export.format == "itunes";
+  engineSelected = cfg.export.enable && cfg.export.format == "engine";
   serviceEnabled = cfg.enable && (cfg.export.enable || cfg.import.enable);
 
   validFileUriAuthority =
@@ -70,7 +72,14 @@ let
   }
   // lib.optionalAttrs nmlSelected { nml = nonNull cfg.nml; }
   // lib.optionalAttrs m3uSelected { m3u = nonNull cfg.m3u; }
-  // lib.optionalAttrs itunesSelected { itunes = nonNull cfg.itunes; };
+  // lib.optionalAttrs itunesSelected { itunes = nonNull cfg.itunes; }
+  // lib.optionalAttrs engineSelected {
+    engine = nonNull {
+      database_path = cfg.engine.database_path;
+      track_path_prefix = cfg.engine.track_path_prefix;
+      managed_root = cfg.engine.managed_root;
+    };
+  };
 
   generatedConfigFile = format.generate "traktor-m3u-sync.toml" configData;
 
@@ -270,6 +279,36 @@ in
       };
     };
 
+    engine = {
+      database_path = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "/mnt/engine/Engine Library/Database2/m.db";
+        description = ''
+          Existing Engine DJ media database path. Rendered as `database_path`
+          in the TOML `[engine]` table and required when export.format is `engine`.
+        '';
+      };
+
+      track_path_prefix = lib.mkOption {
+        type = lib.types.str;
+        default = "..";
+        description = ''
+          Engine path prepended to store-relative track paths. Rendered as
+          `track_path_prefix` in the TOML `[engine]` table.
+        '';
+      };
+
+      managed_root = lib.mkOption {
+        type = lib.types.str;
+        default = "Playlist Sync";
+        description = ''
+          Top-level Engine playlist subtree managed by exports. Rendered as
+          `managed_root` in the TOML `[engine]` table.
+        '';
+      };
+    };
+
     export = {
       enable = lib.mkEnableOption "traktor-m3u-sync export oneshot service";
 
@@ -278,7 +317,7 @@ in
         default = null;
         example = "m3u";
         description = ''
-          Target format for the export service (`m3u`, `nml`, or `itunes`).
+          Target format for the export service (`m3u`, `nml`, `itunes`, or `engine`).
           Passed as `--format` on the command line; selects which
           config fields must be set.
         '';
@@ -384,6 +423,12 @@ in
         {
           assertion = cfg.itunes.location_base != null && validFileUri cfg.itunes.location_base;
           message = "services.traktor-m3u-sync.itunes.location_base must be a complete absolute file: URI when export.format is itunes.";
+        }
+      ]
+      ++ lib.optionals (cfg.configFile == null && cfg.export.format == "engine") [
+        {
+          assertion = cfg.engine.database_path != null;
+          message = "services.traktor-m3u-sync.engine.database_path is required when export.format is engine.";
         }
       ];
 

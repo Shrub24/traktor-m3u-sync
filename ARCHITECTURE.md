@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`traktor-m3u-sync` is a Nix-first Python CLI worker that bridges playlist libraries through a multi-format pipeline. Traktor `collection.nml` and UTF-8 `.m3u8` are import/export modalities; iTunes XML is an export modality; Engine DJ remains deferred.
+`traktor-m3u-sync` is a Nix-first Python CLI worker that bridges playlist libraries through a multi-format pipeline. Traktor `collection.nml` and UTF-8 `.m3u8` are import/export modalities; iTunes XML and Engine DJ are export modalities, with Engine import still deferred.
 
 ## Architecture: store-mediated multi-format bridge
 
@@ -15,7 +15,7 @@ The system is a hub-and-spoke bridge. The hub is a format-neutral playlist model
 5. **Services (`services/`)** — thin orchestration only: resolve config, select the format's adapter, run it, rebuild or read the store, summarize. Format selection is a registry lookup.
 6. **CLI (`cli.py`)** — `import --format nml|m3u` (source → store) and `export --format nml|m3u|itunes` (store → target). Export reads only the store and fails fast when it is empty or uninitialized.
 
-Adding a format means one adapter package and any required path mapping or config section; no other format needs format-specific orchestration. iTunes XML export is implemented; Engine DJ is the next deferred modality.
+Adding a format means one adapter package and any required path mapping or config section; no other format needs format-specific orchestration. Engine DJ is the first non-file target format: instead of generating a file it rebuilds playlists inside an existing Engine database.
 
 ## Confirmed architectural decisions
 
@@ -45,6 +45,9 @@ Adding a format means one adapter package and any required path mapping or confi
 - Orchestration policy (timers, path triggers, Syncthing hooks) is intentionally excluded from the base module — downstream consumers attach scheduling via standard NixOS mechanisms.
 - Generated M3U and iTunes targets are published atomically via a stdlib same-directory temporary file plus `os.replace`; a failed write leaves the prior target intact and removes the temporary file. NML keeps its backup/restore model instead.
 - `export --dry-run` rehearses every export format by running the real exporter against isolated temporary targets (temp dir, temp XML, temp copy of the collection); there is no import dry run and dry runs never touch the configured target or store.
+- Engine DJ export uses direct stdlib `sqlite3` against one existing Engine 5.0 media-drive `m.db` (schema 3.0.2 only). It matches store paths to `Track` rows already present in that database and never creates a database, replays Engine DDL, inserts tracks, or mutates Engine analysis, artwork, or tag data; `libdjinterop` and endjine remain reference implementations, not runtime dependencies.
+- Engine ownership is one configured managed subtree (default `Playlist Sync`), deleted and rebuilt idempotently while unrelated Engine playlists stay untouched. v1 targets only the M: media database; L: main-library mirroring, Engine import, and metadata enrichment remain deferred.
+- Engine publication runs only while Engine DJ is closed (the VM may remain running) and is distinct from generated-file publish: a mode-preserving same-directory staged copy is mutated in one transaction, validated, backed up to an adjacent retained single-generation `.playlist-sync.bak`, then atomically replaced via `os.replace`; the replacement inode is owned by the worker identity and follows the directory's group policy, and a post-publication validation failure restores the backup.
 - `--fail-on-warning` is an opt-in strict mode for import and export: completed-with-warnings exits `2`, errors stay `1`, and the default (flag absent) keeps warnings at `0`.
 - The TOML config contract remains the primary CLI interface; the module's Nix-level options map 1:1 to the same TOML structure.
 - The repository license is GPL-3.0-or-later.
