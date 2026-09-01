@@ -59,9 +59,29 @@ def test_export_writes_minimal_plus_plist_document(tmp_path: Path) -> None:
     assert entry["Location"] == f"file://{base}/House/track.mp3"
 
     folders = [p for p in document["Playlists"] if p.get("Folder")]
-    playlist = next(p for p in document["Playlists"] if not p.get("Folder"))
+    playlist = next(p for p in document["Playlists"] if not p.get("Folder") and not p.get("Master"))
     assert folders[0]["All Items"] is True
+    assert playlist["All Items"] is True
     assert playlist["Playlist Items"] == [{"Track ID": entry["Track ID"]}]
+
+
+def test_master_library_playlist_is_first_and_contains_all_tracks(tmp_path: Path) -> None:
+    base = _library(tmp_path)
+    playlists = (
+        _playlist(base, name="Deep", folder=("House",), rel="House/track.mp3"),
+        _playlist(base, name="Root", rel="House/other.mp3"),
+    )
+
+    document = _export(base, playlists, tmp_path)
+
+    master = document["Playlists"][0]
+    assert master["Name"] == "Library"
+    assert master["Master"] is True
+    assert master["All Items"] is True
+    assert master["Visible"] is False
+    assert master["Playlist Persistent ID"] != document["Library Persistent ID"]
+    track_ids = {t["Track ID"] for t in document["Tracks"].values()}
+    assert {item["Track ID"] for item in master["Playlist Items"]} == track_ids
 
 
 def test_omits_unknown_metadata_and_never_emits_smart_fields(tmp_path: Path) -> None:
@@ -79,7 +99,6 @@ def test_omits_unknown_metadata_and_never_emits_smart_fields(tmp_path: Path) -> 
     text = output.read_text(encoding="utf-8")
     assert "Smart" not in text
     assert "Distinguished Kind" not in text
-    assert "Master" not in text
     assert "Play Count" not in text
 
 
@@ -433,7 +452,9 @@ def test_m3u_import_then_itunes_export_keeps_referential_integrity(
     )
     assert "WARNING code=file_missing" not in exported.stderr
     track_ids = {entry["Track ID"] for entry in document["Tracks"].values()}
-    names = {p["Name"] for p in document["Playlists"] if not p.get("Folder")}
+    names = {
+        p["Name"] for p in document["Playlists"] if not p.get("Folder") and not p.get("Master")
+    }
     assert names == {"Deep", "Rave"}
     for playlist in document["Playlists"]:
         for ref in playlist.get("Playlist Items", []):

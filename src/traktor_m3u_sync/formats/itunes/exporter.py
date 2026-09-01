@@ -17,6 +17,7 @@ from .writer import ItunesPlaylistEntry, ItunesTrack, build_document, render_doc
 
 FORMAT: Final[str] = "itunes"
 LIBRARY_PERSISTENT_SEED: Final[str] = "traktor-m3u-sync:library"
+MASTER_PLAYLIST_SEED: Final[str] = "traktor-m3u-sync:master-playlist"
 
 
 def _seed(kind: str, *parts: str) -> str:
@@ -137,7 +138,17 @@ def _arrange(
     track_ids: Mapping[str, int],
     ids: _IdPool,
 ) -> list[ItunesPlaylistEntry]:
-    entries: list[ItunesPlaylistEntry] = []
+    entries: list[ItunesPlaylistEntry] = [
+        # Master "Library" playlist first, mirroring real iTunes exports:
+        # every track in the document, own Persistent ID, Master/All Items set.
+        ItunesPlaylistEntry(
+            playlist_id=0,
+            persistent_id=ids.allocate(_seed("library", MASTER_PLAYLIST_SEED)),
+            name="Library",
+            items=tuple(sorted(track_ids.values())),
+            master=True,
+        )
+    ]
     folder_ids: dict[tuple[str, ...], str] = {}
 
     def add_folders(folder_path: tuple[str, ...]) -> str | None:

@@ -32,6 +32,7 @@ class ItunesPlaylistEntry:
     items: tuple[int, ...] = ()
     parent_persistent_id: str | None = None
     folder: bool = False
+    master: bool = False
 
 
 def build_document(
@@ -78,12 +79,15 @@ def _playlist_dict(entry: ItunesPlaylistEntry) -> dict[str, Any]:
         "Name": entry.name,
         "Playlist ID": entry.playlist_id,
         "Playlist Persistent ID": entry.persistent_id,
+        "All Items": True,
     }
+    if entry.master:
+        playlist["Master"] = True
+        playlist["Visible"] = False
     if entry.parent_persistent_id is not None:
         playlist["Parent Persistent ID"] = entry.parent_persistent_id
     if entry.folder:
         playlist["Folder"] = True
-        playlist["All Items"] = True
     else:
         playlist["Playlist Items"] = [{"Track ID": track_id} for track_id in entry.items]
     return playlist
