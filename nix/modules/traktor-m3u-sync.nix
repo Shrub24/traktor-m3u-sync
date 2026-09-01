@@ -40,6 +40,7 @@ let
     (cfg.export.enable && cfg.export.format == "m3u")
     || (cfg.import.enable && cfg.import.format == "m3u");
   itunesSelected = cfg.export.enable && cfg.export.format == "itunes";
+  serviceEnabled = cfg.enable && (cfg.export.enable || cfg.import.enable);
 
   validFileUriAuthority =
     authority:
@@ -80,6 +81,15 @@ let
     Type = "oneshot";
     # Fail loudly on bad config; propagate exit code.
     Restart = "no";
+  }
+  // lib.optionalAttrs (cfg.user != null) {
+    User = cfg.user;
+  }
+  // lib.optionalAttrs (cfg.user != null && cfg.group != null) {
+    Group = cfg.group;
+  }
+  // lib.optionalAttrs (cfg.user != null && cfg.supplementaryGroups != [ ]) {
+    SupplementaryGroups = cfg.supplementaryGroups;
   };
 
   serviceExec =
@@ -112,6 +122,39 @@ in
         from the Nix options below. In that mode, the service-specific
         runtime values are expected to come from the external TOML file
         rather than these Nix options.
+      '';
+    };
+
+    user = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "playlist-sync";
+      example = "syncthing";
+      description = ''
+        Account the import/export services run as. The name is
+        deliberately product-neutral so a future tool rename is a file
+        ownership question, not an identity migration. null runs the
+        units as root.
+      '';
+    };
+
+    group = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "playlist-sync";
+      example = "media";
+      description = ''
+        Group the services run as; only meaningful with a non-null
+        user. Use a shared group (e.g. the one owning the music
+        library) to grant access through group membership.
+      '';
+    };
+
+    supplementaryGroups = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "media" ];
+      description = ''
+        Existing groups added to both service processes, typically for
+        shared read/write access to operator-managed media paths.
       '';
     };
 
@@ -273,6 +316,35 @@ in
   };
 
   config = lib.mkMerge [
+    (lib.mkIf serviceEnabled {
+      assertions = [
+        {
+          assertion = cfg.user == null || cfg.group != null;
+          message = "services.traktor-m3u-sync.group is required when user is non-null.";
+        }
+        {
+          assertion = cfg.user != null || cfg.group == null;
+          message = "services.traktor-m3u-sync.group must be null when user is null.";
+        }
+        {
+          assertion = cfg.user == null || (cfg.user == "playlist-sync") == (cfg.group == "playlist-sync");
+          message = "services.traktor-m3u-sync.user and group must either both keep the playlist-sync default or both name operator-managed values; use supplementaryGroups for shared media access.";
+        }
+        {
+          assertion = cfg.user == null || cfg.configFile != null || cfg.store.path != null;
+          message = "services.traktor-m3u-sync.store.path is required for generated config when services run under a non-root user.";
+        }
+      ];
+    })
+
+    (lib.mkIf (serviceEnabled && cfg.user == "playlist-sync" && cfg.group == "playlist-sync") {
+      users.groups.playlist-sync = { };
+      users.users.playlist-sync = {
+        isSystemUser = true;
+        group = "playlist-sync";
+      };
+    })
+
     (lib.mkIf (cfg.enable && cfg.export.enable) {
       assertions = [
         {

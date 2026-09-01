@@ -63,6 +63,8 @@ Sub-areas:
 - `format-path-mappings` — **breaking config migration**: `[library]` removed in favor of `[nml].library_root` / `[m3u].library_root`; `[itunes].base_path` replaced by consumer-facing `location_base` (full `file:` URI, e.g. `file://localhost/M:/Music`) plus optional worker-side `check_base_path` for missing-file warnings
 - `sync-operations` — atomic publish, export dry-run, and `--fail-on-warning` operational contract
 
+**Active OpenSpec change:** `service-identity` — run NixOS oneshots under a neutral dedicated system user with configurable shared-group access
+
 **Planned OpenSpec changes:** `sync-config`, `sync-reporting` (split as needed) — next candidate is Engine DJ adapter; `homelab-automation` (timers, path hooks) stays downstream policy
 
 Sub-areas:

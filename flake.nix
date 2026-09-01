@@ -179,6 +179,7 @@
                           services.traktor-m3u-sync = {
                             enable = true;
                             package = traktor-m3u-sync;
+                            store.path = "/var/lib/traktor-m3u-sync/store.db";
                             itunes = {
                               output_file = "/mnt/playlists/iTunes Music Library.xml";
                               inherit location_base;

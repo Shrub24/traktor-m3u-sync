@@ -39,6 +39,7 @@ Adding a format means one adapter package and any required path mapping or confi
 - A flake app output (`nix run .#default`) delegates to the packaged CLI binary.
 - `traktor-nml-utils` is packaged as a Nix derivation from PyPI since it is not in nixpkgs.
 - A NixOS module (`nixosModules.traktor-m3u-sync`) exposes separate format-generic oneshot `export` and `import` service surfaces with an overridable `package` option; export supports NML, M3U, and iTunes while import supports NML and M3U.
+- The module runs both oneshots under a product-neutral `playlist-sync` system identity by default; custom user/group names and supplementary groups are operator-managed, while numeric UID/GID allocation and path-specific sandboxing remain outside the application contract.
 - Declarative TOML config is rendered into the Nix store; services invoke the CLI with `--config` pointing at the store path.
 - An optional `configFile` override lets operators provide an externally managed TOML file instead of rendering from Nix options.
 - Orchestration policy (timers, path triggers, Syncthing hooks) is intentionally excluded from the base module — downstream consumers attach scheduling via standard NixOS mechanisms.

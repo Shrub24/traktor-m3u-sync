@@ -28,6 +28,9 @@ All options live under `services.traktor-m3u-sync.*`.
 | `enable` | bool | `false` | Enable the traktor-m3u-sync services |
 | `package` | package | flake package | Override the runtime package |
 | `configFile` | null/path | `null` | External TOML config (overrides generated config) |
+| `user` | null/string | `"playlist-sync"` | Service account; custom user/group names must be supplied together and already exist; `null` runs as root |
+| `group` | null/string | `"playlist-sync"` | Primary service group; use the matching default or a matching custom identity |
+| `supplementaryGroups` | list of strings | `[]` | Existing shared groups added to both service processes |
 | `store.path` | null/string | `null` | SQLite store path; null keeps the tool default |
 | `nml.library_root` | null/string | `null` | NML library root; required for `nml` format services |
 | `nml.collection_path` | null/string | `null` | Path to `collection.nml`; required for `nml` format services |
@@ -54,12 +57,57 @@ malformed percent escapes, queries, and fragments are rejected during evaluation
 `check_base_path` is optional and is used only for local worker warnings.
 `itunes` is export-only; `import.format` accepts only `nml` and `m3u`.
 
+The module creates the product-neutral `playlist-sync` system user and group by default, then runs both oneshots under that identity. NixOS allocates the numeric UID/GID and assigns its standard `nologin` shell. Keep both defaults together; custom `user` and `group` names must also be supplied together and are treated as operator-managed. Set both to `null` only as an explicit root escape hatch. Generated configuration requires an explicit `store.path` when running non-root because the CLI's home-relative fallback is not writable by the system account.
+
+Before starting a service, grant its identity access to every configured path. The import service needs read access to `m3u.import_dir` and write access to the store parent; exports need write access to their target. Prefer directory ownership or `supplementaryGroups = [ "media" ]`; don't replace only the default primary group. The base module deliberately does not hard-code homelab paths or `ReadOnlyPaths=`/`ReadWritePaths=` sandbox policy.
+
 The module creates two systemd oneshot services:
 
 - `traktor-m3u-sync-export.service`
 - `traktor-m3u-sync-import.service`
 
-Both have `wantedBy = []` by default — they are never triggered automatically.
+Both have `wantedBy = []` by default — they are never triggered automatically. `Restart = "no"`; any uncaught CLI/configuration/filesystem error therefore returns a non-zero unit result instead of being hidden or retried.
+
+### Service identity and permissions
+
+Default generated units contain:
+
+```ini
+User=playlist-sync
+Group=playlist-sync
+```
+
+The module creates that product-neutral system account only when both defaults are kept. To use an existing host account, set both options together:
+
+```nix
+services.traktor-m3u-sync = {
+  user = "media-worker";
+  group = "media";
+};
+```
+
+For shared access without replacing the default primary identity:
+
+```nix
+services.traktor-m3u-sync.supplementaryGroups = [ "media" ];
+```
+
+Grant the resulting identity filesystem access before starting the units. For example, an M3U-to-iTunes deployment needs:
+
+- read/execute access to `m3u.import_dir` and `itunes.check_base_path`;
+- write/execute access to the parent of `store.path` and `itunes.output_file`;
+- any parent-directory traversal permissions required to reach those paths.
+
+The module does not change ownership of arbitrary runtime paths. Use declarative directory ownership, group permissions, or ACLs in the host configuration. `ReadOnlyPaths=` and `ReadWritePaths=` are optional systemd sandbox restrictions, not permission grants; configure them downstream using the host's real paths.
+
+Use root only as an explicit escape hatch:
+
+```nix
+services.traktor-m3u-sync = {
+  user = null;
+  group = null;
+};
+```
 
 ## Config file override
 
