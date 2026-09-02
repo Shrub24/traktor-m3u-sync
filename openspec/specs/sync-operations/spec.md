@@ -23,7 +23,7 @@ The system SHALL publish M3U playlist files and iTunes XML output by atomically 
 - **AND** a newly created target does not become owner-only solely because of temporary-file creation
 
 ### Requirement: Rehearse exports without mutating configured state
-The system SHALL support `--dry-run` for every export format, validating and rendering against isolated temporary targets while leaving the configured output, NML collection, and store unchanged.
+The system SHALL support `--dry-run` for every export format, including through generated NixOS export jobs, validating and rendering against isolated temporary targets while leaving the configured output, NML collection, and referenced state store unchanged.
 
 #### Scenario: Dry-run export succeeds
 - **WHEN** the user runs export with `--dry-run` and valid populated state
@@ -39,8 +39,13 @@ The system SHALL support `--dry-run` for every export format, validating and ren
 - **WHEN** the user runs an export dry run against an absent or uninitialized configured store
 - **THEN** the command fails without creating the store database or its parent directory
 
+#### Scenario: Generated export job uses dry-run
+- **WHEN** an operator adds `--dry-run` to a NixOS export job's extra arguments
+- **THEN** that generated job rehearses its configured format using its referenced state
+- **AND** preserves its configured target and state store
+
 ### Requirement: Opt into warning-sensitive command outcomes
-The system SHALL support `--fail-on-warning` for import and export commands. It SHALL return status `2` after a command otherwise completes with warnings when the flag is set, while preserving status `0` for warning-complete commands when the flag is absent.
+The system SHALL support `--fail-on-warning` for import and export commands, including through generated NixOS jobs. It SHALL return status `2` after a command otherwise completes with warnings when the flag is set, while preserving status `0` for warning-complete commands when the flag is absent.
 
 #### Scenario: Strict warning outcome
 - **WHEN** a command completes and emits at least one warning with `--fail-on-warning`
@@ -50,6 +55,11 @@ The system SHALL support `--fail-on-warning` for import and export commands. It 
 #### Scenario: Compatible warning outcome
 - **WHEN** a command completes with warnings without `--fail-on-warning`
 - **THEN** it exits with status `0`
+
+#### Scenario: Generated job opts into strict warnings
+- **WHEN** a NixOS import or export job includes `--fail-on-warning` in its extra arguments
+- **THEN** the generated job preserves that argument as a distinct command argument
+- **AND** systemd records status `2` as a failed job rather than activating its success targets
 
 ### Requirement: Safely publish Engine database exports
 The system SHALL stage Engine changes in a same-directory database copy, retain an adjacent backup of the validated prior target, close and validate the staged database before atomically replacing the target, and preserve the target's existing file mode.
