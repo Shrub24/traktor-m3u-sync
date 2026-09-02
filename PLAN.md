@@ -56,8 +56,11 @@ Sub-areas:
 
 **Intent:** Harden configuration, improve reporting, and add operational niceties for automated/scheduled use.
 
+**Active OpenSpec change (apply in progress):**
+- `nix-job-orchestration` — named state domains and independently triggerable import/export jobs with validated success fan-out and shared systemd templates
+
 **Completed OpenSpec changes:**
-- `deployment-packaging` — Nix runtime package, app output, NixOS module with declarative config and separate export/import services
+- `deployment-packaging` — Nix runtime package, app output, and NixOS module with declarative config
 - `playlist-store` — hub-and-spoke pivot: internal model, SQLite store, adapter contract, format-based config, store-mediated CLI (see ARCHITECTURE.md)
 - `itunes-export` — store-to-iTunes XML exporter, including NixOS export service support
 - `format-path-mappings` — **breaking config migration**: `[library]` removed in favor of `[nml].library_root` / `[m3u].library_root`; `[itunes].base_path` replaced by consumer-facing `location_base` (full `file:` URI, e.g. `file://localhost/M:/Music`) plus optional worker-side `check_base_path` for missing-file warnings

@@ -21,9 +21,7 @@
         "aarch64-linux"
       ];
 
-      imports = [
-        treefmt-nix.flakeModule
-      ];
+      imports = [ treefmt-nix.flakeModule ];
 
       flake = {
         nixosModules.traktor-m3u-sync = import ./nix/modules/traktor-m3u-sync.nix;
@@ -32,40 +30,28 @@
 
       perSystem =
         {
-          config,
           pkgs,
           system,
           ...
         }:
         let
           treefmtEval = treefmt-nix.lib.evalModule pkgs ./treefmt.nix;
-
           python = pkgs.python314;
-
           traktor-nml-utils = python.pkgs.callPackage ./nix/packages/traktor-nml-utils.nix { };
-
           traktor-m3u-sync = python.pkgs.buildPythonApplication {
             pname = "traktor-m3u-sync";
             version = "0.1.0";
             pyproject = true;
-
             src = pkgs.lib.cleanSource ./.;
-
             build-system = [ python.pkgs.hatchling ];
-
             dependencies = [
               traktor-nml-utils
               python.pkgs.typer
             ];
-
-            # No pytest shipped in the runtime closure.
             doCheck = false;
-
             meta = {
               description = "Traktor NML to M3U playlist sync tool";
               homepage = "https://github.com/wolkenarchitekt/traktor-m3u-sync";
-              # Repo license is GPL-3.0-or-later, which is compatible with the
-              # GPL-3.0-only traktor-nml-utils runtime dependency.
               license = pkgs.lib.licenses.gpl3Plus;
               mainProgram = "traktor-m3u-sync";
             };
@@ -84,34 +70,87 @@
                   modules = [
                     self.nixosModules.traktor-m3u-sync
                     {
+                      fileSystems."/" = {
+                        device = "/dev/null";
+                        fsType = "ext4";
+                      };
+                      boot.loader.grub.devices = [ "nodev" ];
+
                       services.traktor-m3u-sync = {
                         enable = true;
                         package = traktor-m3u-sync;
-                        store.path = "/var/lib/traktor-m3u-sync/store.db";
-                        m3u = {
-                          library_root = "/mnt/music";
-                          import_dir = "/mnt/playlists/import";
-                        };
-                        engine = {
-                          database_path = "/mnt/engine/Engine Library/Database2/m.db";
-                          track_path_prefix = "../Music";
-                          managed_root = "Managed Engine Playlists";
-                        };
-                        export = {
-                          enable = true;
-                          format = "engine";
-                          extraArgs = [ "--fail-on-warning" ];
-                        };
-                        import = {
-                          enable = true;
-                          format = "m3u";
+                        supplementaryGroups = [ "media" ];
+                        states.library.path = "/var/lib/playlist-sync/library.db";
+                        jobs = {
+                          ingest = {
+                            action = "import";
+                            state = "library";
+                            format = "m3u";
+                            m3u = {
+                              library_root = "/mnt/music";
+                              import_dir = "/mnt/playlists/import";
+                            };
+                            onSuccess = [
+                              "itunes"
+                              "engine"
+                            ];
+                            extraArgs = [ "--fail-on-warning" ];
+                          };
+                          itunes = {
+                            action = "export";
+                            state = "library";
+                            format = "itunes";
+                            itunes = {
+                              output_file = "/mnt/playlists/iTunes Music Library.xml";
+                              location_base = "file://localhost/M:/Music";
+                            };
+                          };
+                          engine = {
+                            action = "export";
+                            state = "library";
+                            format = "engine";
+                            engine = {
+                              database_path = "/mnt/engine/Engine Library/Database2/m.db";
+                              track_path_prefix = "../Music";
+                              managed_root = "Managed Engine Playlists";
+                            };
+                            extraArgs = [ "--dry-run" ];
+                          };
+                          external = {
+                            action = "export";
+                            state = "library";
+                            format = "m3u";
+                            configFile = "/etc/playlist-sync/config with % percent.toml";
+                          };
                         };
                       };
                     }
                   ];
                 };
 
-                externalConfigEvaled = nixpkgs.lib.nixosSystem {
+                cfg = evaled.config.services.traktor-m3u-sync;
+                services = evaled.config.systemd.services;
+                ingest = services."traktor-m3u-sync-import@ingest";
+                itunes = services."traktor-m3u-sync-export@itunes";
+                engine = services."traktor-m3u-sync-export@engine";
+                external = services."traktor-m3u-sync-export@external";
+                importTemplate = services."traktor-m3u-sync-import@";
+                exportTemplate = services."traktor-m3u-sync-export@";
+                legacyAbsent =
+                  !(builtins.hasAttr "store" cfg)
+                  && !(builtins.hasAttr "import" cfg)
+                  && !(builtins.hasAttr "export" cfg);
+                # Force assertion booleans first and only interpolate messages of
+                # failures: merged base assertions (e.g. filesystems) have messages
+                # that crash on minimal fixtures, same shape as NixOS top-level.
+                failedModuleMessages = nixpkgs.lib.concatMap (
+                  assertion:
+                  if assertion.assertion || !nixpkgs.lib.hasPrefix "services.traktor-m3u-sync" assertion.message then
+                    [ ]
+                  else
+                    [ assertion.message ]
+                ) evaled.config.assertions;
+                negativeFixture = nixpkgs.lib.nixosSystem {
                   inherit (pkgs) system;
                   modules = [
                     self.nixosModules.traktor-m3u-sync
@@ -119,267 +158,127 @@
                       services.traktor-m3u-sync = {
                         enable = true;
                         package = traktor-m3u-sync;
-                        configFile = "/etc/traktor-m3u-sync/config with % percent.toml";
-                        export = {
-                          enable = true;
-                          format = "engine";
-                          extraArgs = [ "--fail-on-warning" ];
+                        states = {
+                          one.path = "/var/lib/playlist-sync/one.db";
+                          two.path = "/var/lib/playlist-sync/one.db";
                         };
-                        import = {
-                          enable = true;
-                          format = "m3u";
-                          extraArgs = [ "--fail-on-warning" ];
+                        jobs = {
+                          cycleA = {
+                            action = "import";
+                            state = "one";
+                            format = "m3u";
+                            m3u = {
+                              library_root = "/mnt/music";
+                              import_dir = "/mnt/playlists/import";
+                            };
+                            onSuccess = [ "cycleB" ];
+                          };
+                          cycleB = {
+                            action = "export";
+                            state = "one";
+                            format = "m3u";
+                            m3u = {
+                              library_root = "/mnt/music";
+                              output_dir = "/mnt/playlists/out";
+                            };
+                            onSuccess = [ "cycleA" ];
+                          };
+                          dupImport = {
+                            action = "import";
+                            state = "one";
+                            format = "m3u";
+                            m3u = {
+                              library_root = "/mnt/music";
+                              import_dir = "/mnt/playlists/import";
+                            };
+                          };
+                          externalOverlap = {
+                            action = "export";
+                            state = "two";
+                            format = "itunes";
+                            configFile = "/etc/playlist-sync/config.toml";
+                            itunes.output_file = "/tmp/overlap.xml";
+                          };
                         };
                       };
                     }
                   ];
                 };
-
-                nmlMissingRootEvaled =
-                  let
-                    # Same rationale as locationBaseEvaled: probe the module's
-                    # assertion list rather than the full toplevel.
-                    evaled = nixpkgs.lib.nixosSystem {
-                      inherit (pkgs) system;
-                      modules = [
-                        self.nixosModules.traktor-m3u-sync
-                        {
-                          services.traktor-m3u-sync = {
-                            enable = true;
-                            package = traktor-m3u-sync;
-                            nml.collection_path = "/mnt/traktor/collection.nml";
-                            export = {
-                              enable = true;
-                              format = "nml";
-                            };
-                          };
-                        }
-                      ];
-                    };
-                    moduleFailing = builtins.filter (
-                      a: !a.assertion && nixpkgs.lib.hasPrefix "services.traktor-m3u-sync" a.message
-                    ) evaled.config.assertions;
-                  in
-                  {
-                    success = moduleFailing == [ ];
-                    value = null;
-                  };
-
-                engineMissingDatabaseEvaled =
-                  let
-                    evaled = nixpkgs.lib.nixosSystem {
-                      inherit (pkgs) system;
-                      modules = [
-                        self.nixosModules.traktor-m3u-sync
-                        {
-                          services.traktor-m3u-sync = {
-                            enable = true;
-                            package = traktor-m3u-sync;
-                            store.path = "/var/lib/traktor-m3u-sync/store.db";
-                            export = {
-                              enable = true;
-                              format = "engine";
-                            };
-                          };
-                        }
-                      ];
-                    };
-                    moduleFailing = builtins.filter (
-                      a: !a.assertion && nixpkgs.lib.hasPrefix "services.traktor-m3u-sync" a.message
-                    ) evaled.config.assertions;
-                  in
-                  {
-                    success = moduleFailing == [ ];
-                    value = null;
-                  };
-
-                engineImportEvaled = builtins.tryEval (
-                  (nixpkgs.lib.nixosSystem {
-                    inherit (pkgs) system;
-                    modules = [
-                      self.nixosModules.traktor-m3u-sync
-                      {
-                        services.traktor-m3u-sync = {
-                          enable = true;
-                          import = {
-                            enable = true;
-                            format = "engine";
-                          };
-                        };
-                      }
-                    ];
-                  }).config.services.traktor-m3u-sync.import.format
-                );
-
-                locationBaseEvaled =
-                  location_base:
-                  let
-                    # Evaluate the module's own assertion list instead of the
-                    # full toplevel: a bare nixosSystem always fails toplevel
-                    # on base assertions (fileSystems, boot loader), which
-                    # would mask our URI validation inside tryEval.
-                    evaled = nixpkgs.lib.nixosSystem {
-                      inherit (pkgs) system;
-                      modules = [
-                        self.nixosModules.traktor-m3u-sync
-                        {
-                          services.traktor-m3u-sync = {
-                            enable = true;
-                            package = traktor-m3u-sync;
-                            store.path = "/var/lib/traktor-m3u-sync/store.db";
-                            itunes = {
-                              output_file = "/mnt/playlists/iTunes Music Library.xml";
-                              inherit location_base;
-                            };
-                            export = {
-                              enable = true;
-                              format = "itunes";
-                            };
-                          };
-                        }
-                      ];
-                    };
-                    moduleFailing = builtins.filter (
-                      a: !a.assertion && nixpkgs.lib.hasPrefix "services.traktor-m3u-sync" a.message
-                    ) evaled.config.assertions;
-                  in
-                  {
-                    success = moduleFailing == [ ];
-                    value = null;
-                  };
-
-                cfg = evaled.config.services.traktor-m3u-sync;
-
-                exportService = evaled.config.systemd.services.traktor-m3u-sync-export;
-                importService = evaled.config.systemd.services.traktor-m3u-sync-import;
-                externalExportService = externalConfigEvaled.config.systemd.services.traktor-m3u-sync-export;
-                externalImportService = externalConfigEvaled.config.systemd.services.traktor-m3u-sync-import;
-
-                # Smoke-test: verify the module option surface exists and
-                # evaluates without error, the service ExecStart lines pass
-                # their declared --format and --config, and the generated
-                # TOML parses with only the selected Engine and M3U sections.
-                moduleSurfaceOk = cfg.enable == true;
-                exportExecOk =
-                  builtins.match ".*\"export\" \"--format\" \"engine\" \"--config\" .* \"--fail-on-warning\"" exportService.serviceConfig.ExecStart
-                  != null;
-                importExecOk =
-                  builtins.match ".*\"import\" \"--format\" \"m3u\" \"--config\" .*" importService.serviceConfig.ExecStart
-                  != null;
-                nmlRootValidationOk = !nmlMissingRootEvaled.success;
-                engineDatabaseValidationOk = !engineMissingDatabaseEvaled.success;
-                engineImportRejected = !engineImportEvaled.success;
-                validLocationBasesOk = nixpkgs.lib.all (location_base: (locationBaseEvaled location_base).success) [
-                  "file:///srv/music"
-                  "file://localhost/M:/Music"
-                  "file://server/share/music"
-                  "file://FS_01/share/music"
+                negativeMessages = nixpkgs.lib.concatMap (
+                  assertion:
+                  if assertion.assertion || !nixpkgs.lib.hasPrefix "services.traktor-m3u-sync" assertion.message then
+                    [ ]
+                  else
+                    [ assertion.message ]
+                ) negativeFixture.config.assertions;
+                expectedNegativeMessages = [
+                  "services.traktor-m3u-sync.states must use distinct store paths."
+                  "services.traktor-m3u-sync.states allow at most one import job per state."
+                  "services.traktor-m3u-sync.jobs.cycleA.onSuccess reaches a cycle."
+                  "services.traktor-m3u-sync.jobs.cycleB.onSuccess reaches a cycle."
+                  "services.traktor-m3u-sync.jobs.externalOverlap.configFile cannot be combined with selected-format generated settings."
                 ];
-                invalidLocationBasesOk =
-                  nixpkgs.lib.all (location_base: !(locationBaseEvaled location_base).success)
-                    [
-                      "file:///srv/music with spaces"
-                      "file:///srv/music%2"
-                      "file://user@server/share/music"
-                      "file://server:445/share/music"
-                      "file://-server/share/music"
-                      "file:///srv/music?query"
-                      "file:///srv/music#fragment"
-                      "file:///srv/café"
-                    ];
-                externalExportExecOk =
-                  builtins.match ".*\"export\" \"--format\" \"engine\" \"--config\" \"/etc/traktor-m3u-sync/config with %% percent.toml\" \"--fail-on-warning\"" externalExportService.serviceConfig.ExecStart
-                  != null;
-                externalImportExecOk =
-                  builtins.match ".*\"import\" \"--format\" \"m3u\" \"--config\" \"/etc/traktor-m3u-sync/config with %% percent.toml\" \"--fail-on-warning\"" externalImportService.serviceConfig.ExecStart
-                  != null;
+                negativeOk =
+                  nixpkgs.lib.all (msg: builtins.elem msg negativeMessages) expectedNegativeMessages
+                  && negativeMessages == expectedNegativeMessages;
+                identityOk =
+                  importTemplate.serviceConfig.User == "playlist-sync"
+                  && exportTemplate.serviceConfig.Group == "playlist-sync"
+                  && importTemplate.serviceConfig.SupplementaryGroups == [ "media" ];
+                fanOutOk =
+                  ingest.unitConfig.OnSuccess == [
+                    "traktor-m3u-sync-export@itunes.service"
+                    "traktor-m3u-sync-export@engine.service"
+                  ];
+                execOk =
+                  builtins.match ".*\"import\" \"--format\" \"m3u\" \"--config\" .* \"--fail-on-warning\"" (
+                    builtins.elemAt ingest.serviceConfig.ExecStart 1
+                  ) != null
+                  &&
+                    builtins.match ".*\"export\" \"--format\" \"engine\" \"--config\" .* \"--dry-run\"" (
+                      builtins.elemAt engine.serviceConfig.ExecStart 1
+                    ) != null
+                  &&
+                    builtins.match ".*\"export\" \"--format\" \"m3u\" \"--config\" \"/etc/playlist-sync/config with %% percent.toml\"" (
+                      builtins.elemAt external.serviceConfig.ExecStart 1
+                    ) != null;
               in
               pkgs.runCommand "module-eval-test" { nativeBuildInputs = [ traktor-m3u-sync ]; } ''
-                set -e
-
-                echo "module-eval: checking option surface"
-                ${if moduleSurfaceOk then "" else "echo 'FAIL: enable option not true'; exit 1"}
-
-                echo "module-eval: checking export service ExecStart"
-                ${if exportExecOk then "" else "echo 'FAIL: export ExecStart missing expected arguments'; exit 1"}
-
-                echo "module-eval: checking import service ExecStart"
-                ${if importExecOk then "" else "echo 'FAIL: import ExecStart missing expected pattern'; exit 1"}
-
-                echo "module-eval: checking Engine database validation"
+                set -eu
                 ${
-                  if engineDatabaseValidationOk then
+                  if failedModuleMessages == [ ] then
                     ""
                   else
-                    "echo 'FAIL: Engine export accepted missing database_path'; exit 1"
+                    "echo 'FAIL: module assertions: ${nixpkgs.lib.concatStringsSep "; " failedModuleMessages}'; exit 1"
                 }
+                ${if negativeOk then "" else "echo 'FAIL: negative assertions'; exit 1"}
+                ${if identityOk then "" else "echo 'FAIL: shared template identity'; exit 1"}
+                ${if fanOutOk then "" else "echo 'FAIL: OnSuccess fan-out'; exit 1"}
+                ${if execOk then "" else "echo 'FAIL: escaped job argv'; exit 1"}
 
-                echo "module-eval: checking Engine import rejection"
-                ${if engineImportRejected then "" else "echo 'FAIL: import format accepted engine'; exit 1"}
-
-                echo "module-eval: checking NML root validation"
-                ${
-                  if nmlRootValidationOk then "" else "echo 'FAIL: NML service accepted missing library_root'; exit 1"
-                }
-
-                echo "module-eval: checking file URI validation"
-                ${
-                  if validLocationBasesOk then
-                    ""
-                  else
-                    "echo 'FAIL: valid file URI location_base was rejected'; exit 1"
-                }
-                ${
-                  if invalidLocationBasesOk then
-                    ""
-                  else
-                    "echo 'FAIL: malformed file URI location_base was accepted'; exit 1"
-                }
-
-                echo "module-eval: checking external-config export ExecStart"
-                ${
-                  if externalExportExecOk then
-                    ""
-                  else
-                    "echo 'FAIL: export ExecStart lost config or extra argument boundaries'; exit 1"
-                }
-
-                echo "module-eval: checking external-config import ExecStart"
-                ${
-                  if externalImportExecOk then
-                    ""
-                  else
-                    "echo 'FAIL: import ExecStart lost config or extra argument boundaries'; exit 1"
-                }
-
-                echo "module-eval: checking rendered Engine TOML"
-                config_file=$(echo '${exportService.serviceConfig.ExecStart}' | sed 's/.*"--config" "\([^"]*\)".*/\1/')
-                config_toml=$(< "$config_file")
-                case "$config_toml" in
-                  *'[itunes]'* | *'[nml]'*)
-                    echo 'FAIL: generated TOML contains an unselected format section'
+                for config_file in \
+                  $(echo '${builtins.elemAt ingest.serviceConfig.ExecStart 1}' | sed 's/.*"--config" "\([^"]*\)".*/\1/') \
+                  $(echo '${builtins.elemAt itunes.serviceConfig.ExecStart 1}' | sed 's/.*"--config" "\([^"]*\)".*/\1/') \
+                  $(echo '${builtins.elemAt engine.serviceConfig.ExecStart 1}' | sed 's/.*"--config" "\([^"]*\)".*/\1/'); do
+                  action=export
+                  format=engine
+                  case "$config_file" in
+                    *ingest*) action=import; format=m3u ;;
+                    *itunes*) format=itunes ;;
+                  esac
+                  if traktor-m3u-sync "$action" --format "$format" --config "$config_file" > loader.out 2>&1; then
+                    echo "FAIL: CLI unexpectedly completed fixture job"
                     exit 1
-                    ;;
-                  *'[engine]'*'database_path = "/mnt/engine/Engine Library/Database2/m.db"'*'managed_root = "Managed Engine Playlists"'*'track_path_prefix = "../Music"'*'[m3u]'*) ;;
-                  *)
-                    echo 'FAIL: generated TOML missing expected Engine settings'
-                    exit 1
-                    ;;
-                esac
+                  fi
+                  case "$(< loader.out)" in
+                    *'ERROR code=config_error'*)
+                      echo "FAIL: packaged CLI rejected generated $format config"
+                      exit 1
+                      ;;
+                  esac
+                done
 
-                echo "module-eval: checking rendered TOML against packaged CLI loader"
-                if traktor-m3u-sync export --format engine --config "$config_file" > loader.out 2>&1; then
-                  echo 'FAIL: packaged CLI unexpectedly succeeded without the fixture store'
-                  exit 1
-                fi
-                case "$(< loader.out)" in
-                  *'ERROR code=config_error'*)
-                    echo 'FAIL: generated Engine config was rejected by the loader'
-                    exit 1
-                    ;;
-                esac
-
-                echo "module-eval: all checks passed" > $out
+                touch "$out"
               '';
           };
 
@@ -389,11 +288,9 @@
             traktor-nml-utils = traktor-nml-utils;
           };
 
-          apps = {
-            default = {
-              type = "app";
-              program = pkgs.lib.getExe traktor-m3u-sync;
-            };
+          apps.default = {
+            type = "app";
+            program = pkgs.lib.getExe traktor-m3u-sync;
           };
 
           devShells.default = pkgs.mkShell {

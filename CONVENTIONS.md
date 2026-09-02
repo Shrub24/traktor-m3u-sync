@@ -45,10 +45,9 @@
 
 - The flake exposes a runtime package (`packages.<system>.traktor-m3u-sync`) built with `buildPythonApplication`.
 - A flake app (`apps.<system>.default`) wraps the package for `nix run` convenience.
-- A NixOS module (`nixosModules.traktor-m3u-sync`) provides declarative export/import oneshot services.
-- The module renders TOML config from Nix options into the Nix store; services invoke the CLI with `--config`.
-- An optional `configFile` override lets operators provide an externally managed TOML file instead.
-- Orchestration policy (timers, path units, Syncthing hooks) is intentionally excluded from the base module — downstream consumers attach scheduling via standard NixOS mechanisms.
+- A NixOS module (`nixosModules.traktor-m3u-sync`) provides named state domains and independently triggerable import/export jobs through shared systemd templates.
+- The module renders one TOML config per generated job from its referenced state and selected format; a job-level `configFile` may provide externally managed TOML instead.
+- Orchestration policy (timers, path units, consumer hooks, and Engine availability coordination) is intentionally excluded from the base module — downstream consumers attach it through standard NixOS mechanisms.
 - The TOML config contract remains the primary CLI interface; the module's Nix-level options map 1:1 to the same TOML structure.
 
 ## Formatting and checks

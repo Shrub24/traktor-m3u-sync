@@ -163,42 +163,41 @@ nix run .#default -- export --format m3u --config traktor-m3u-sync.toml
 ### NixOS module
 
 The flake exposes `nixosModules.traktor-m3u-sync` with declarative service
-configuration. The module renders a TOML config into the Nix store and runs
-separate oneshot `import` and `export` systemd services. See
+configuration. The module renders one TOML config per job into the Nix store
+and runs a systemd template-instance service per declared job
+(`traktor-m3u-sync-<action>@<job>.service`). See
 [docs/nix-deployment.md](docs/nix-deployment.md) for the option reference.
 
 #### Config override
 
-Set `configFile` to use an externally managed TOML file instead of rendering
-from Nix options:
+Set a job's `configFile` to use an externally managed TOML file instead of
+rendering from Nix options:
 
 ```nix
 services.traktor-m3u-sync = {
   enable = true;
-  configFile = "/etc/traktor-m3u-sync/config.toml";
-  export = {
-    enable = true;
+  states.library.path = "/var/lib/playlist-sync/library.db";
+  jobs.export-m3u = {
+    action = "export";
+    state = "library";
     format = "m3u";
-  };
-  import = {
-    enable = true;
-    format = "nml";
+    configFile = "/etc/traktor-m3u-sync/config.toml";
   };
 };
 ```
 
-When `configFile` is set, the module uses it directly and skips its
-generated-config assertions. The per-service `format` is still required —
-it is passed to the CLI as `--format`.
+When `configFile` is set for a job, the module uses it directly instead of
+generating a TOML file; such a job must not also set its selected-format
+settings. The job `format` is still required — it is passed to the CLI as
+`--format`.
 
 #### Downstream orchestration
 
-Services are oneshot units with `wantedBy = []` by default — no timers, path
+Job services are oneshot units with no implicit triggers — no timers, path
 triggers, or Syncthing hooks are bundled. Attach scheduling or filesystem
 triggers in your own NixOS config (e.g. `systemd.timers` or Syncthing folder
-watch hooks) as downstream orchestration policy. The module adds no flags of
-its own; operators that want warning-sensitive oneshots override the service
-`ExecStart` downstream and append `--fail-on-warning` (see
+watch hooks) as downstream orchestration policy. Operational flags such as
+`--fail-on-warning` go in `jobs.<name>.extraArgs` (see
 [docs/nix-deployment.md](docs/nix-deployment.md)).
 
 ## Commands
