@@ -19,6 +19,8 @@ class EngineExporter:
     database_path: Path
     track_path_prefix: str = ".."
     managed_root: str = "Playlist Sync"
+    # Optional worker-side mount; used only for file_missing warnings, never for matching.
+    check_base_path: Path | None = None
 
     def write(self, playlists: Sequence[Playlist]) -> SyncResult:
         outcome = write_database(
@@ -26,6 +28,7 @@ class EngineExporter:
             playlists,
             managed_root=self.managed_root,
             track_path_prefix=self.track_path_prefix,
+            check_base_path=self.check_base_path,
         )
         return _result(outcome)
 

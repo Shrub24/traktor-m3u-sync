@@ -104,6 +104,7 @@
                               output_file = "/mnt/playlists/iTunes Music Library.xml";
                               location_base = "file://localhost/M:/Music";
                             };
+                            onFailure = [ "engine" ];
                           };
                           engine = {
                             action = "export";
@@ -122,6 +123,16 @@
                             format = "m3u";
                             configFile = "/etc/playlist-sync/config with % percent.toml";
                           };
+                          reporting = {
+                            action = "export";
+                            state = "library";
+                            format = "m3u";
+                            m3u = {
+                              library_root = "/mnt/music";
+                              output_dir = "/mnt/playlists/report-out";
+                            };
+                            reportFile = "/var/lib/playlist-sync/reports/last run.json";
+                          };
                         };
                       };
                     }
@@ -134,6 +145,7 @@
                 itunes = services."traktor-m3u-sync-export@itunes";
                 engine = services."traktor-m3u-sync-export@engine";
                 external = services."traktor-m3u-sync-export@external";
+                reporting = services."traktor-m3u-sync-export@reporting";
                 importTemplate = services."traktor-m3u-sync-import@";
                 exportTemplate = services."traktor-m3u-sync-export@";
                 legacyAbsent =
@@ -172,6 +184,7 @@
                               import_dir = "/mnt/playlists/import";
                             };
                             onSuccess = [ "cycleB" ];
+                            onFailure = [ "ghost" ];
                           };
                           cycleB = {
                             action = "export";
@@ -215,6 +228,7 @@
                   "services.traktor-m3u-sync.states must use distinct store paths."
                   "services.traktor-m3u-sync.states allow at most one import job per state."
                   "services.traktor-m3u-sync.jobs.cycleA.onSuccess reaches a cycle."
+                  "services.traktor-m3u-sync.jobs.cycleA.onFailure references a missing job."
                   "services.traktor-m3u-sync.jobs.cycleB.onSuccess reaches a cycle."
                   "services.traktor-m3u-sync.jobs.externalOverlap.configFile cannot be combined with selected-format generated settings."
                 ];
@@ -229,7 +243,11 @@
                   ingest.unitConfig.OnSuccess == [
                     "traktor-m3u-sync-export@itunes.service"
                     "traktor-m3u-sync-export@engine.service"
-                  ];
+                  ]
+                  &&
+                    itunes.unitConfig.OnFailure == [
+                      "traktor-m3u-sync-export@engine.service"
+                    ];
                 execOk =
                   builtins.match ".*\"import\" \"--format\" \"m3u\" \"--config\" .* \"--fail-on-warning\"" (
                     builtins.elemAt ingest.serviceConfig.ExecStart 1
@@ -242,6 +260,12 @@
                     builtins.match ".*\"export\" \"--format\" \"m3u\" \"--config\" \"/etc/playlist-sync/config with %% percent.toml\"" (
                       builtins.elemAt external.serviceConfig.ExecStart 1
                     ) != null;
+                reportOk =
+                  builtins.match ".*\"--report-file\" \"/var/lib/playlist-sync/reports/last run.json\"" (
+                    builtins.elemAt reporting.serviceConfig.ExecStart 1
+                  ) != null
+                  &&
+                    builtins.match ".*\"--report-file\".*" (builtins.elemAt ingest.serviceConfig.ExecStart 1) == null;
               in
               pkgs.runCommand "module-eval-test" { nativeBuildInputs = [ traktor-m3u-sync ]; } ''
                 set -eu
@@ -253,8 +277,9 @@
                 }
                 ${if negativeOk then "" else "echo 'FAIL: negative assertions'; exit 1"}
                 ${if identityOk then "" else "echo 'FAIL: shared template identity'; exit 1"}
-                ${if fanOutOk then "" else "echo 'FAIL: OnSuccess fan-out'; exit 1"}
+                ${if fanOutOk then "" else "echo 'FAIL: OnSuccess/OnFailure fan-out'; exit 1"}
                 ${if execOk then "" else "echo 'FAIL: escaped job argv'; exit 1"}
+                ${if reportOk then "" else "echo 'FAIL: reportFile argv escaping'; exit 1"}
 
                 for config_file in \
                   $(echo '${builtins.elemAt ingest.serviceConfig.ExecStart 1}' | sed 's/.*"--config" "\([^"]*\)".*/\1/') \

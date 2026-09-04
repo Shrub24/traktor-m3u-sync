@@ -50,8 +50,13 @@ location_base = "file://localhost/M:/Music"
 # The export writes a `<database name>.playlist-sync.bak` backup next to this file.
 database_path = "/path/to/Engine Library/Database2/m.db"
 
-# Prefix prepended to store-relative track paths when matching existing Engine tracks (default: "..")
+# Prefix prepended to store-relative track paths when matching existing Engine tracks (default: "..").
+# Relative ("../library") and absolute consumer paths ("M:/library") are both accepted.
 # track_path_prefix = ".."
+
+# Optional worker-side mount of the library, used only for file-missing warnings.
+# Matching never uses it; omit to skip local existence checks.
+# check_base_path = "/srv/storage/media/music/library"
 
 # Top-level Engine playlist subtree owned by exports, rebuilt on every run (default: "Playlist Sync")
 # managed_root = "Playlist Sync"

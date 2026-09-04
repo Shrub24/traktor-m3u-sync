@@ -5,17 +5,21 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
 from ..config import DEFAULT_STORE_PATH, StoreConfig
+from ..contracts import StoreProvenance
 from ..model import Playlist, Track
 from ..model.identity import dedup_key
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
-    schema_version INTEGER NOT NULL
+    schema_version INTEGER NOT NULL,
+    source_format TEXT,
+    imported_at TEXT
 );
 CREATE TABLE IF NOT EXISTS tracks (
     id INTEGER PRIMARY KEY,
@@ -73,7 +77,10 @@ class PlaylistStore:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             target = self.path
         try:
-            self._conn = sqlite3.connect(target, uri=read_only)
+            # busy_timeout: a wholesale import rebuild holds the write lock for the whole
+            # run; 30s covers even a large collection rebuild (sqlite3's 5s default is
+            # too tight for that).
+            self._conn = sqlite3.connect(target, uri=read_only, timeout=30.0)
         except sqlite3.Error as exc:
             raise StoreError(f"Cannot open store at {self.path}: {exc}") from exc
         if read_only:
@@ -107,9 +114,28 @@ class PlaylistStore:
         row = self._conn.execute("SELECT COUNT(*) FROM tracks").fetchone()
         return int(row[0]) if row is not None else 0
 
-    def rebuild(self, playlists: Sequence[Playlist]) -> None:
-        """Replace all store content with the given playlists."""
+    def provenance(self) -> StoreProvenance:
+        """Return the recorded store origin, rejecting provenance-less stores."""
+        try:
+            row = self._conn.execute("SELECT source_format, imported_at FROM meta").fetchone()
+        except sqlite3.Error as exc:
+            raise StoreSchemaError(
+                f"Store at {self.path} has no provenance; re-run import to rebuild it"
+            ) from exc
+        if row is None or row[0] is None or row[1] is None:
+            raise StoreSchemaError(
+                f"Store at {self.path} has no provenance; re-run import to rebuild it"
+            )
+        return StoreProvenance(source_format=str(row[0]), imported_at=str(row[1]))
+
+    def rebuild(self, playlists: Sequence[Playlist], *, source_format: str) -> None:
+        """Replace all store content with the given playlists, recording their origin."""
+        imported_at = datetime.now(UTC).isoformat(timespec="seconds")
         with self._conn:
+            self._conn.execute(
+                "UPDATE meta SET source_format = ?, imported_at = ?",
+                (source_format, imported_at),
+            )
             self._conn.execute("DELETE FROM playlist_tracks")
             self._conn.execute("DELETE FROM playlists")
             self._conn.execute("DELETE FROM tracks")
@@ -198,10 +224,23 @@ class PlaylistStore:
                 )
                 return
             if int(row[0]) != SCHEMA_VERSION:
-                raise StoreSchemaError(
-                    f"Store at {self.path} has schema version {row[0]}, expected "
-                    f"{SCHEMA_VERSION}; re-run import to rebuild it"
-                )
+                self._reset_schema()
+
+    def _reset_schema(self) -> None:
+        """Drop a stale-version store and re-initialize it in place.
+
+        The store is a disposable cache, never migrated: a version mismatch only
+        delays the next wholesale rebuild, so write mode resets instead of raising.
+        """
+        with self._conn:
+            self._conn.executescript(
+                "DROP TABLE IF EXISTS playlist_tracks; "
+                "DROP TABLE IF EXISTS playlists; "
+                "DROP TABLE IF EXISTS tracks; "
+                "DROP TABLE IF EXISTS meta;"
+            )
+            self._conn.executescript(_SCHEMA)
+            self._conn.execute("INSERT INTO meta (schema_version) VALUES (?)", (SCHEMA_VERSION,))
 
     def _insert_playlist(self, position: int, playlist: Playlist) -> int:
         cursor = self._conn.execute(

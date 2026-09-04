@@ -63,10 +63,23 @@ let
         description = "Arguments appended after the explicit format and config arguments.";
       };
 
+      reportFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "/var/lib/playlist-sync/report.json";
+        description = "Write a JSON run report to this path after the job.";
+      };
+
       onSuccess = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [ ];
         description = "Configured jobs started after this job succeeds.";
+      };
+
+      onFailure = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = "Configured jobs started after this job fails.";
       };
 
       nml = {
@@ -136,6 +149,12 @@ let
           type = lib.types.str;
           default = "Playlist Sync";
         };
+        check_base_path = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          example = "/srv/music";
+          description = "Worker-side mount used only for missing-file warnings.";
+        };
       };
     };
   };
@@ -162,6 +181,7 @@ let
       job.engine.database_path
       (if job.engine.track_path_prefix == ".." then null else job.engine.track_path_prefix)
       (if job.engine.managed_root == "Playlist Sync" then null else job.engine.managed_root)
+      job.engine.check_base_path
     ];
   };
 
@@ -213,6 +233,10 @@ let
         "--config"
         (toString (effectiveConfig name job))
       ]
+      ++ lib.optionals (job.reportFile != null) [
+        "--report-file"
+        job.reportFile
+      ]
       ++ job.extraArgs
     );
 
@@ -243,6 +267,7 @@ let
       description = "Playlist sync ${job.action} job ${name}";
       overrideStrategy = "asDropin";
       unitConfig.OnSuccess = map jobUnitName job.onSuccess;
+      unitConfig.OnFailure = map jobUnitName job.onFailure;
       serviceConfig.ExecStart = [
         ""
         (jobExec name job)
@@ -253,10 +278,20 @@ let
     stateName:
     lib.filter (name: jobs.${name}.action == "import" && jobs.${name}.state == stateName) jobNames;
 
+  fanOutKinds = [
+    "onSuccess"
+    "onFailure"
+  ];
+
+  fanOutTargets = kind: name: jobs.${name}.${kind};
+
   hasCycleFrom =
-    path: name:
+    kind: path: name:
     lib.elem name path
-    || (builtins.hasAttr name jobs && lib.any (hasCycleFrom (path ++ [ name ])) jobs.${name}.onSuccess);
+    || (
+      builtins.hasAttr name jobs
+      && lib.any (hasCycleFrom kind (path ++ [ name ])) (fanOutTargets kind name)
+    );
 
   stateAssertions = lib.mapAttrsToList (name: state: {
     assertion = lib.hasPrefix "/" state.path;
@@ -283,18 +318,28 @@ let
         assertion = job.action == "export" || lib.elem job.format importFormats;
         message = "${prefix}.format '${job.format}' is not supported for import jobs.";
       }
-      {
-        assertion = lib.all (target: builtins.hasAttr target jobs) job.onSuccess;
-        message = "${prefix}.onSuccess references a missing job.";
-      }
-      {
-        assertion = !(lib.elem name job.onSuccess);
-        message = "${prefix}.onSuccess must not reference itself.";
-      }
-      {
-        assertion = !(hasCycleFrom [ ] name);
-        message = "${prefix}.onSuccess reaches a cycle.";
-      }
+    ]
+    ++ lib.concatMap (
+      kind:
+      let
+        targets = job.${kind};
+      in
+      [
+        {
+          assertion = lib.all (target: builtins.hasAttr target jobs) targets;
+          message = "${prefix}.${kind} references a missing job.";
+        }
+        {
+          assertion = !(lib.elem name targets);
+          message = "${prefix}.${kind} must not reference itself.";
+        }
+        {
+          assertion = !(hasCycleFrom kind [ ] name);
+          message = "${prefix}.${kind} reaches a cycle.";
+        }
+      ]
+    ) fanOutKinds
+    ++ [
       {
         assertion =
           job.configFile == null || lib.all (value: value == null) (selectedFormatSettings job).${job.format};

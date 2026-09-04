@@ -15,7 +15,7 @@ import os
 import sqlite3
 import stat
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import pytest
 from typer.testing import CliRunner
@@ -46,7 +46,14 @@ RUNNER = CliRunner()
 ENGINE_DB = "m.db"
 BACKUP = ENGINE_DB + engine_writer.BACKUP_SUFFIX
 MANAGED_ROOT = "Playlist Sync"
-ARGS: dict[str, str] = {"managed_root": MANAGED_ROOT, "track_path_prefix": ".."}
+
+
+class _WriteArgs(TypedDict):
+    managed_root: str
+    track_path_prefix: str
+
+
+ARGS: _WriteArgs = {"managed_root": MANAGED_ROOT, "track_path_prefix": ".."}
 
 # Mirrors Engine 5.0 media schema 3.0.2 playlist primitives closely enough to exercise the
 # authoritative linked-list maintenance triggers, plus a PerformanceData table to prove
@@ -1052,6 +1059,151 @@ def test_engine_export_cli_dry_run_preserves_state_and_matches_real_summary(
     assert (tmp_path / BACKUP).is_file()
 
 
+# ── engine check_base_path and prefix matching ──────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("prefix", "engine_path", "rel_path"),
+    [
+        ("M:/library", "M:/Library/Music/Absolute.mp3", "Music/Absolute.mp3"),
+        ("../library", "../Library/Music/Rel.mp3", "Music/Rel.mp3"),
+    ],
+)
+def test_absolute_and_dotdot_prefixes_match_engine_paths(
+    tmp_path: Path, prefix: str, engine_path: str, rel_path: str
+) -> None:
+    """Prefix joins match exactly, case-insensitively, for M:/library and ../library."""
+    engine = tmp_path / ENGINE_DB
+    _engine_db(engine)
+    with _open(engine) as connection:
+        connection.execute("INSERT INTO Track (path) VALUES (?)", (engine_path,))
+    playlists = (Playlist("Prefix", (), (_track(rel_path),)),)
+
+    result = EngineExporter(database_path=engine, track_path_prefix=prefix).write(playlists)
+
+    assert result.counts["tracks_matched"] == 1
+    assert result.counts["memberships_written"] == 1
+    assert result.counts["memberships_skipped"] == 0
+
+
+def test_engine_check_base_path_warns_file_missing_without_skipping(tmp_path: Path) -> None:
+    engine = tmp_path / ENGINE_DB
+    _engine_db(engine)
+    mount = tmp_path / "mount"
+
+    result = EngineExporter(database_path=engine, check_base_path=mount).write(
+        (Playlist("One", (), (_track("Music/One.mp3"),)),)
+    )
+
+    missing = [w for w in result.warnings if w.code == "file_missing"]
+    assert len(missing) == 1
+    assert missing[0].message == "Track file not found on the local filesystem"
+    assert (mount / "Music/One.mp3").as_posix() in (missing[0].detail or "")
+    assert result.counts["tracks_matched"] == 1
+    assert result.counts["memberships_written"] == 1
+    assert result.counts["memberships_skipped"] == 0
+
+
+def test_engine_check_base_path_dedupes_missing_warning_across_playlists(tmp_path: Path) -> None:
+    engine = tmp_path / ENGINE_DB
+    _engine_db(engine)
+    mount = tmp_path / "mount"
+
+    result = EngineExporter(database_path=engine, check_base_path=mount).write(
+        (
+            Playlist("One", (), (_track("Music/One.mp3"),)),
+            Playlist("Two", (), (_track("Music/One.mp3"),)),
+        )
+    )
+
+    missing = [w for w in result.warnings if w.code == "file_missing"]
+    assert len(missing) == 1
+    assert missing[0].detail == (mount / "Music/One.mp3").as_posix()
+    assert result.counts["memberships_written"] == 2
+
+
+def test_engine_check_base_path_is_silent_when_files_exist(tmp_path: Path) -> None:
+    engine = tmp_path / ENGINE_DB
+    _engine_db(engine)
+    mount = tmp_path / "mount"
+    present = mount / "Music/One.mp3"
+    present.parent.mkdir(parents=True)
+    present.write_bytes(b"audio")
+
+    result = EngineExporter(database_path=engine, check_base_path=mount).write(
+        (Playlist("One", (), (_track("Music/One.mp3"),)),)
+    )
+
+    assert [w.code for w in result.warnings] == []
+
+
+def test_engine_omitted_check_base_path_never_checks_filesystem(tmp_path: Path) -> None:
+    engine = tmp_path / ENGINE_DB
+    _engine_db(engine)
+
+    result = EngineExporter(database_path=engine).write(
+        (Playlist("One", (), (_track("Music/One.mp3"),)),)
+    )
+
+    assert all(w.code != "file_missing" for w in result.warnings)
+    assert result.counts["memberships_written"] == 1
+
+
+def test_load_config_parses_engine_check_base_path(tmp_path: Path) -> None:
+    check = tmp_path / "mount"
+    config = load_config(
+        _write_toml(
+            tmp_path,
+            f'[engine]\ndatabase_path = "{tmp_path / ENGINE_DB}"\ncheck_base_path = "{check}"\n',
+        )
+    )
+
+    assert config.engine.check_base_path == check
+
+
+def test_engine_check_base_path_cli_override_wins(tmp_path: Path) -> None:
+    config = load_config(
+        _write_toml(
+            tmp_path,
+            f'[engine]\ndatabase_path = "{tmp_path / ENGINE_DB}"\n'
+            f'check_base_path = "{tmp_path / "configured"}"\n',
+        )
+    )
+
+    overridden = apply_export_overrides(
+        config, format="engine", engine_check_base_path=tmp_path / "cli"
+    )
+    kept = apply_export_overrides(config, format="engine")
+
+    assert kept.engine.check_base_path == tmp_path / "configured"
+    assert overridden.engine.check_base_path == tmp_path / "cli"
+
+
+def test_engine_export_cli_routes_check_base_path_into_warnings(tmp_path: Path) -> None:
+    database = tmp_path / ENGINE_DB
+    _engine_db(database)
+    mount = tmp_path / "mount"
+    config_path = _write_toml(tmp_path, f'[engine]\ndatabase_path = "{database}"\n')
+    _seed_store(tmp_path)
+
+    result = RUNNER.invoke(
+        app,
+        [
+            "export",
+            "--format",
+            "engine",
+            "--config",
+            str(config_path),
+            "--engine-check-base-path",
+            str(mount),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "WARNING code=file_missing" in result.stderr
+    assert "SUMMARY playlists_written=2 tracks_matched=3" in result.stdout
+
+
 def _write_toml(tmp_path: Path, engine_text: str | None = None) -> Path:
     text = (
         f'[store]\npath = "{tmp_path / "store.db"}"\n\n'
@@ -1066,4 +1218,4 @@ def _write_toml(tmp_path: Path, engine_text: str | None = None) -> Path:
 
 def _seed_store(tmp_path: Path) -> None:
     with PlaylistStore(tmp_path / "store.db") as store:
-        store.rebuild(_playlists())
+        store.rebuild(_playlists(), source_format="nml")

@@ -57,9 +57,10 @@ Sub-areas:
 **Intent:** Harden configuration, improve reporting, and add operational niceties for automated/scheduled use.
 
 **Active OpenSpec change (apply in progress):**
-- `nix-job-orchestration` — named state domains and independently triggerable import/export jobs with validated success fan-out and shared systemd templates
+- `sync-reporting` — JSON run reports (including on failure), store provenance, empty-import warning, `onFailure` fan-out, Engine `check_base_path`
 
 **Completed OpenSpec changes:**
+- `nix-job-orchestration` — named state domains and independently triggerable import/export jobs with validated success fan-out and shared systemd templates
 - `deployment-packaging` — Nix runtime package, app output, and NixOS module with declarative config
 - `playlist-store` — hub-and-spoke pivot: internal model, SQLite store, adapter contract, format-based config, store-mediated CLI (see ARCHITECTURE.md)
 - `itunes-export` — store-to-iTunes XML exporter, including NixOS export service support
@@ -68,7 +69,7 @@ Sub-areas:
 - `service-identity` — run NixOS oneshots under a neutral dedicated system user with configurable shared-group access
 - `engine-export` — M-only Engine DJ 5.0 playlist publication through a validated existing-track SQLite writer, retained backup, and atomic replacement; live-validated with twelve playlists and 1,085 ordered memberships
 
-**Planned OpenSpec changes:** `sync-config`, `sync-reporting` (split as needed) — `homelab-automation` (timers, path hooks) stays downstream policy
+**Planned OpenSpec changes:** `sync-config` — `homelab-automation` (timers, path hooks) stays downstream policy
 
 Sub-areas:
 - config ergonomics: format-owned path mappings, CLI overrides, selected-format validation

@@ -66,6 +66,7 @@ def write_database(
     *,
     managed_root: str,
     track_path_prefix: str,
+    check_base_path: Path | None = None,
 ) -> WriteOutcome:
     """Rebuild one managed subtree and publish the result atomically, retaining a backup."""
     database_path = Path(database_path)
@@ -77,7 +78,7 @@ def write_database(
     stage = _create_stage(database_path, mode)
     published = False
     try:
-        outcome = _rebuild_stage(stage, playlists, managed_root, track_path_prefix)
+        outcome = _rebuild_stage(stage, playlists, managed_root, track_path_prefix, check_base_path)
         _validate_staged(stage)
         _refresh_backup(database_path, backup_path, mode)
         _publish_stage(stage, database_path)
@@ -135,13 +136,18 @@ def _rebuild_stage(
     playlists: Sequence[Playlist],
     managed_root: str,
     track_path_prefix: str,
+    check_base_path: Path | None,
 ) -> WriteOutcome:
     connection = _connect(stage)
     try:
         _validate_database(connection)
         connection.execute("BEGIN IMMEDIATE")
         outcome = rebuild_managed_subtree(
-            connection, playlists, managed_root=managed_root, track_path_prefix=track_path_prefix
+            connection,
+            playlists,
+            managed_root=managed_root,
+            track_path_prefix=track_path_prefix,
+            check_base_path=check_base_path,
         )
         _validate_database(connection)
         connection.commit()
@@ -294,6 +300,7 @@ def rebuild_managed_subtree(
     *,
     managed_root: str,
     track_path_prefix: str,
+    check_base_path: Path | None = None,
 ) -> WriteOutcome:
     """Delete and rebuild exactly one managed subtree within an open transaction."""
     information = connection.execute("SELECT uuid FROM Information").fetchone()
@@ -320,6 +327,7 @@ def rebuild_managed_subtree(
     warnings: list[AdapterWarning] = []
     skipped = {"unresolved": 0, "missing": 0, "ambiguous": 0, "duplicate": 0}
     memberships = 0
+    checked_paths: set[str] = set()
 
     for playlist in playlists:
         label = playlist_label(playlist.folder_path, playlist.name)
@@ -373,6 +381,18 @@ def rebuild_managed_subtree(
                 )
                 continue
             seen.add(track_id)
+            if check_base_path is not None and track.path is not None:
+                checked = check_base_path / track.path
+                if checked.as_posix() not in checked_paths:
+                    checked_paths.add(checked.as_posix())
+                    if not checked.exists():
+                        warnings.append(
+                            AdapterWarning(
+                                code="file_missing",
+                                message="Track file not found on the local filesystem",
+                                detail=checked.as_posix(),
+                            )
+                        )
             entity_id = _insert_entity(connection, leaf_id, track_id, database_uuid)
             if previous_entity_id is not None:
                 connection.execute(

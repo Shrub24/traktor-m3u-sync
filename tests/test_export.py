@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
@@ -183,6 +185,165 @@ def test_export_cli_emits_structured_summary(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "SUMMARY playlists_written=1 tracks_exported=1 warnings_emitted=0" in result.stdout
+
+
+def test_export_cli_summary_shows_store_origin(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, _write_collection_fixture(tmp_path))
+
+    RUNNER.invoke(app, ["import", "--format", "nml", "--config", str(config_path)])
+    result = RUNNER.invoke(app, ["export", "--format", "m3u", "--config", str(config_path)])
+
+    assert result.exit_code == 0
+    assert "source_format=nml" in result.stdout
+    assert re.search(r"imported_at=\d{4}-\d{2}-\d{2}T", result.stdout) is not None
+
+
+def test_export_cli_writes_json_report_with_counts_provenance_and_status(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, _write_collection_fixture(tmp_path))
+    report_path = tmp_path / "reports" / "export.json"
+
+    RUNNER.invoke(app, ["import", "--format", "nml", "--config", str(config_path)])
+    result = RUNNER.invoke(
+        app,
+        [
+            "export",
+            "--format",
+            "m3u",
+            "--config",
+            str(config_path),
+            "--report-file",
+            str(report_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    assert document["command"] == "export"
+    assert document["format"] == "m3u"
+    assert document["exit_status"] == 0
+    assert document["counts"]["playlists_written"] == 1
+    assert document["counts"]["tracks_exported"] == 1
+    assert document["warnings"] == []
+    assert document["provenance"]["source_format"] == "nml"
+    for key, value in document["counts"].items():
+        assert f"{key}={value}" in result.stdout
+    assert re.search(r"imported_at=\d{4}-\d{2}-\d{2}T", result.stdout) is not None
+
+
+def test_export_cli_strict_run_report_records_exit_status_2(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, _write_outside_root_fixture(tmp_path))
+    report_path = tmp_path / "reports" / "strict.json"
+
+    RUNNER.invoke(app, ["import", "--format", "nml", "--config", str(config_path)])
+    result = RUNNER.invoke(
+        app,
+        [
+            "export",
+            "--format",
+            "m3u",
+            "--config",
+            str(config_path),
+            "--fail-on-warning",
+            "--report-file",
+            str(report_path),
+        ],
+    )
+
+    assert result.exit_code == 2
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    assert document["exit_status"] == 2
+    assert {w["code"] for w in document["warnings"]} == {"track_unresolved"}
+    assert document["counts"]["warnings_emitted"] == 1
+
+
+def test_export_cli_report_write_failure_warns_without_failing(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, _write_collection_fixture(tmp_path))
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory", encoding="utf-8")
+    report_path = blocker / "nested" / "report.json"
+
+    RUNNER.invoke(app, ["import", "--format", "nml", "--config", str(config_path)])
+    result = RUNNER.invoke(
+        app,
+        [
+            "export",
+            "--format",
+            "m3u",
+            "--config",
+            str(config_path),
+            "--report-file",
+            str(report_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "WARNING code=report_write_failed" in result.stderr
+    assert "SUMMARY playlists_written=1" in result.stdout
+    assert not report_path.exists()
+
+
+def test_export_cli_writes_failure_report_on_hard_failure(tmp_path: Path) -> None:
+    report_path = tmp_path / "reports" / "failed.json"
+
+    result = RUNNER.invoke(
+        app,
+        [
+            "export",
+            "--format",
+            "m3u",
+            "--config",
+            str(tmp_path / "nonexistent.toml"),
+            "--report-file",
+            str(report_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "ERROR code=config_error" in result.stderr
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    assert document["command"] == "export"
+    assert document["exit_status"] == 1
+    assert document["counts"] == {}
+    assert [w["code"] for w in document["warnings"]] == ["config_error"]
+    assert "Config file not found" in document["warnings"][0]["message"]
+
+
+def test_export_cli_dry_run_report_marks_dry_run(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path, _write_collection_fixture(tmp_path))
+    RUNNER.invoke(app, ["import", "--format", "nml", "--config", str(config_path)])
+    dry_report = tmp_path / "reports" / "dry.json"
+    real_report = tmp_path / "reports" / "real.json"
+
+    dry = RUNNER.invoke(
+        app,
+        [
+            "export",
+            "--format",
+            "m3u",
+            "--dry-run",
+            "--config",
+            str(config_path),
+            "--report-file",
+            str(dry_report),
+        ],
+    )
+    real = RUNNER.invoke(
+        app,
+        [
+            "export",
+            "--format",
+            "m3u",
+            "--config",
+            str(config_path),
+            "--report-file",
+            str(real_report),
+        ],
+    )
+
+    assert dry.exit_code == 0
+    assert json.loads(dry_report.read_text(encoding="utf-8"))["dry_run"] is True
+    assert real.exit_code == 0
+    assert "dry_run" not in json.loads(real_report.read_text(encoding="utf-8"))
 
 
 def test_export_cli_fails_fast_on_empty_store(tmp_path: Path) -> None:

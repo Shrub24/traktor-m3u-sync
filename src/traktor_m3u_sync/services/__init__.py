@@ -29,8 +29,11 @@ def run_import(config: AppConfig, format: str) -> SyncResult:
     """Read one source format wholesale and rebuild the store snapshot."""
     result = _importer_for(config, format).read()
     with PlaylistStore(config.store.path) as store:
-        store.rebuild(result.playlists)
-    return SyncResult(counts=_import_counts(result), warnings=result.warnings)
+        store.rebuild(result.playlists, source_format=format)
+        provenance = store.provenance()
+    return SyncResult(
+        counts=_import_counts(result), warnings=result.warnings, provenance=provenance
+    )
 
 
 def run_export(config: AppConfig, format: str, *, dry_run: bool = False) -> SyncResult:
@@ -43,13 +46,14 @@ def run_export(config: AppConfig, format: str, *, dry_run: bool = False) -> Sync
                 f"Store at {config.store.path} holds no playlists; run import first"
             )
         playlists = store.load_playlists()
+        provenance = store.provenance()
     if dry_run:
         with tempfile.TemporaryDirectory(prefix=f"traktor-m3u-sync-{format}-dry-run-") as sandbox:
             sandboxed = _dry_run_config(config, format, Path(sandbox))
             result = _exporter_for(sandboxed, format).write(playlists)
     else:
         result = _exporter_for(config, format).write(playlists)
-    return SyncResult(counts=result.counts, warnings=result.warnings)
+    return SyncResult(counts=result.counts, warnings=result.warnings, provenance=provenance)
 
 
 def _dry_run_config(config: AppConfig, format: str, sandbox: Path) -> AppConfig:
@@ -131,6 +135,7 @@ _EXPORTERS: Final[Mapping[str, Callable[[AppConfig], Exporter]]] = {
         database_path=_require(config.engine.database_path, "database_path"),
         track_path_prefix=config.engine.track_path_prefix,
         managed_root=config.engine.managed_root,
+        check_base_path=config.engine.check_base_path,
     ),
 }
 

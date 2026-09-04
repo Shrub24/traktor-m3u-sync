@@ -54,10 +54,13 @@ class ItunesConfig:
 @dataclass(frozen=True)
 class EngineConfig:
     # Required only for the Engine export command, validated per command.
-    # database_path must point at an existing Engine DJ media-drive m.db.
+    # database_path must point at an existing Engine DJ media-drive m.db;
+    # check_base_path is the optional worker-side mount used only for
+    # missing-file warnings.
     database_path: Path | None = None
     track_path_prefix: str = DEFAULT_ENGINE_TRACK_PATH_PREFIX
     managed_root: str = DEFAULT_ENGINE_MANAGED_ROOT
+    check_base_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -118,6 +121,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
                 _optional_string(engine_table, "managed_root", "engine")
                 or DEFAULT_ENGINE_MANAGED_ROOT
             ),
+            check_base_path=_optional_path(engine_table, "check_base_path", "engine"),
         ),
     )
 
@@ -164,6 +168,7 @@ def apply_export_overrides(
     engine_database: Path | None = None,
     engine_track_prefix: str | None = None,
     engine_managed_root: str | None = None,
+    engine_check_base_path: Path | None = None,
 ) -> AppConfig:
     """Apply CLI overrides for `export` and validate what that command needs."""
     m3u = replace(config.m3u, output_dir=output_dir or config.m3u.output_dir)
@@ -205,6 +210,11 @@ def apply_export_overrides(
         ),
         track_path_prefix=engine_track_prefix or config.engine.track_path_prefix,
         managed_root=engine_managed_root or config.engine.managed_root,
+        check_base_path=(
+            engine_check_base_path.expanduser()
+            if engine_check_base_path
+            else config.engine.check_base_path
+        ),
     )
     if format == "engine" and engine.database_path is None:
         raise ConfigError(

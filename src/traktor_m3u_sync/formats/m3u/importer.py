@@ -28,7 +28,21 @@ class M3uImporter:
             playlists.append(_to_playlist(parsed, self.mapping, warnings))
 
         identified, identity_warnings = identify_playlists(playlists)
+        if not identified and _has_files(self.import_dir):
+            warnings.append(_empty_source_warning(self.import_dir))
         return ImportResult(playlists=identified, warnings=tuple(warnings) + identity_warnings)
+
+
+def _has_files(root: Path) -> bool:
+    return any(path.is_file() for path in root.rglob("*"))
+
+
+def _empty_source_warning(source: Path) -> AdapterWarning:
+    return AdapterWarning(
+        code="empty_import_source",
+        message="Import source is non-empty but stored no playlists",
+        detail=source.as_posix(),
+    )
 
 
 def _to_playlist(

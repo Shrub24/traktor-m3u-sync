@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -369,6 +370,115 @@ def test_import_cli_emits_structured_summary(tmp_path: Path) -> None:
     assert "tracks_stored=2" in result.stdout
     assert "tracks_skipped=0" in result.stdout
     assert "warnings_emitted=0" in result.stdout
+    assert "source_format=m3u" in result.stdout
+    assert "imported_at=" in result.stdout
+
+
+def test_import_nonempty_source_without_playlists_warns_and_strict_exits_2(
+    tmp_path: Path,
+) -> None:
+    import_dir = tmp_path / "m3u"
+    import_dir.mkdir()
+    (import_dir / "readme.txt").write_text("no playlists here", encoding="utf-8")
+    config_path = tmp_path / "traktor-m3u-sync.toml"
+    config_path.write_text(
+        f'[store]\npath = "{tmp_path / "store.db"}"\n\n'
+        f'[m3u]\nlibrary_root = "../music"\nimport_dir = "{import_dir}"\n',
+        encoding="utf-8",
+    )
+
+    default = RUNNER.invoke(app, ["import", "--format", "m3u", "--config", str(config_path)])
+    strict = RUNNER.invoke(
+        app,
+        ["import", "--format", "m3u", "--config", str(config_path), "--fail-on-warning"],
+    )
+
+    assert default.exit_code == 0
+    assert "SUMMARY playlists_imported=0" in default.stdout
+    assert "WARNING code=empty_import_source" in default.stderr
+    assert "warnings_emitted=1" in default.stdout
+    assert strict.exit_code == 2
+
+
+def test_import_empty_source_dir_stays_silent_success(tmp_path: Path) -> None:
+    import_dir = tmp_path / "m3u"
+    import_dir.mkdir()
+    config_path = tmp_path / "traktor-m3u-sync.toml"
+    config_path.write_text(
+        f'[store]\npath = "{tmp_path / "store.db"}"\n\n'
+        f'[m3u]\nlibrary_root = "../music"\nimport_dir = "{import_dir}"\n',
+        encoding="utf-8",
+    )
+
+    default = RUNNER.invoke(app, ["import", "--format", "m3u", "--config", str(config_path)])
+    strict = RUNNER.invoke(
+        app,
+        ["import", "--format", "m3u", "--config", str(config_path), "--fail-on-warning"],
+    )
+
+    assert default.exit_code == 0
+    assert strict.exit_code == 0
+    assert "WARNING code=empty_import_source" not in default.stderr
+    assert "SUMMARY playlists_imported=0" in default.stdout
+
+
+def test_import_nml_collection_without_playlists_warns_empty_source(tmp_path: Path) -> None:
+    collection_path = tmp_path / "collection.nml"
+    collection_path.write_text(
+        """<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<NML VERSION="20">
+  <HEAD COMPANY="Native Instruments"></HEAD>
+  <COLLECTION ENTRIES="0">
+  </COLLECTION>
+  <PLAYLISTS>
+    <NODE TYPE="FOLDER" NAME="$ROOT">
+      <SUBNODES>
+      </SUBNODES>
+    </NODE>
+  </PLAYLISTS>
+</NML>
+""",
+        encoding="utf-8",
+    )
+    config = _app_config(tmp_path, collection_path)
+
+    result = run_import(config, "nml")
+
+    assert any(w.code == "empty_import_source" for w in result.warnings)
+    assert result.counts["playlists_imported"] == 0
+
+
+def test_import_cli_writes_json_report(tmp_path: Path) -> None:
+    config_path = _write_config_file(tmp_path, _write_flat_m3u_fixture)
+    report_path = tmp_path / "reports" / "import.json"
+
+    result = RUNNER.invoke(
+        app,
+        [
+            "import",
+            "--format",
+            "m3u",
+            "--config",
+            str(config_path),
+            "--report-file",
+            str(report_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    assert document["command"] == "import"
+    assert document["format"] == "m3u"
+    assert document["exit_status"] == 0
+    assert document["counts"] == {
+        "playlists_imported": 2,
+        "tracks_stored": 2,
+        "tracks_skipped": 0,
+        "warnings_emitted": 0,
+    }
+    assert document["warnings"] == []
+    assert document["provenance"]["source_format"] == "m3u"
+    assert document["provenance"]["imported_at"].endswith("+00:00")
 
 
 def test_import_cli_summary_reports_warning_count(tmp_path: Path) -> None:

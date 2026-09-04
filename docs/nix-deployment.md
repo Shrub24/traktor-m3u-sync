@@ -33,6 +33,8 @@ Job names must match `^[A-Za-z0-9][A-Za-z0-9_-]*$`; names are never silently rew
 | `jobs.<name>.configFile` | null/string | `null` | External authoritative TOML instead of generated settings |
 | `jobs.<name>.extraArgs` | list of strings | `[]` | Distinct CLI arguments appended after format/config |
 | `jobs.<name>.onSuccess` | list of job names | `[]` | Jobs started only after status 0; missing, self, and cyclic references are rejected |
+| `jobs.<name>.onFailure` | list of job names | `[]` | Jobs started when the instance fails; validated like `onSuccess` |
+| `jobs.<name>.reportFile` | null/string | `null` | Path for the JSON run report (`--report-file`) |
 | `jobs.<name>.nml.library_root` | null/string | `null` | Required for generated NML jobs |
 | `jobs.<name>.nml.collection_path` | null/string | `null` | Required for generated NML jobs |
 | `jobs.<name>.nml.sandbox_name` | string | `"Imported Playlists"` | NML sandbox folder |
@@ -45,6 +47,7 @@ Job names must match `^[A-Za-z0-9][A-Za-z0-9_-]*$`; names are never silently rew
 | `jobs.<name>.engine.database_path` | null/string | `null` | Required existing Engine `m.db` path |
 | `jobs.<name>.engine.track_path_prefix` | string | `".."` | Prefix used to match Engine tracks |
 | `jobs.<name>.engine.managed_root` | string | `"Playlist Sync"` | Managed Engine playlist subtree |
+| `jobs.<name>.engine.check_base_path` | null/string | `null` | Optional worker-side missing-file check root |
 
 Generated jobs receive one TOML file containing `[store]` from their referenced state and only their selected format section. With `configFile`, the external file owns both store and format configuration; selected-format generated settings must not also be set, and the module cannot verify that the external store agrees with the declared state.
 
@@ -119,7 +122,9 @@ systemctl status traktor-m3u-sync-export@itunes.service
 journalctl -u traktor-m3u-sync-export@engine.service
 ```
 
-`onSuccess` fan-out is asynchronous. Status `0` starts targets; status `1`, or status `2` from `--fail-on-warning`, does not. A downstream failure appears on that target unit and does not change the completed source result. `--dry-run` and `--fail-on-warning` belong in `extraArgs` as separate list items.
+`onSuccess` fan-out is asynchronous. Status `0` starts targets; status `1`, or status `2` from `--fail-on-warning`, does not. `onFailure` targets start when the instance fails instead. A downstream failure appears on that target unit and does not change the completed source result. `--dry-run` and `--fail-on-warning` belong in `extraArgs` as separate list items.
+
+Every command records its store origin (`source_format`, `imported_at`) in export summaries, and `--report-file` (or per-job `reportFile`) persists a JSON run report with counts, warnings, provenance, and exit status — including a report on hard failures and a `dry_run` marker on rehearsals. An import whose non-empty source yields zero playlists warns `empty_import_source`, so strict-mode automation trips on silent-empty scans.
 
 Engine DJ must remain closed for an Engine export. The module does not create, chown, mount, schedule, or grant access to its database. The shared service identity needs access to every state and adapter path; Engine publication additionally needs create-and-rename access in the database directory.
 

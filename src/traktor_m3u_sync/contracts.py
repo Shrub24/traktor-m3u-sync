@@ -18,6 +18,14 @@ class AdapterWarning:
 
 
 @dataclass(frozen=True)
+class StoreProvenance:
+    """Origin of the store snapshot: importing format and wholesale-rebuild time."""
+
+    source_format: str
+    imported_at: str
+
+
+@dataclass(frozen=True)
 class ImportResult:
     playlists: Sequence[Playlist]
     warnings: Sequence[AdapterWarning] = ()
@@ -25,10 +33,15 @@ class ImportResult:
 
 @dataclass(frozen=True)
 class SyncResult:
-    """Counts and warnings from one adapter or store-mediated run."""
+    """Counts and warnings from one adapter or store-mediated run.
+
+    ``provenance`` is only set by store-mediated service runs (import records the
+    just-written origin, export reads it back); raw adapters leave it unset.
+    """
 
     counts: Mapping[str, int]
     warnings: Sequence[AdapterWarning] = ()
+    provenance: StoreProvenance | None = None
 
 
 @runtime_checkable

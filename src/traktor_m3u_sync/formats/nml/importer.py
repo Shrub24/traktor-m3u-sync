@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from ...contracts import ImportResult
+from ...contracts import AdapterWarning, ImportResult
 from ...model.identity import identify_playlists
 from ...paths.traktor import TraktorPathMapping
 from .reader import NmlReadError, load_collection, read_playlists
@@ -30,4 +30,12 @@ class NmlImporter:
             raise CollectionReadError(f"Collection is missing or unreadable: {exc}") from exc
         extracted = read_playlists(collection.nml, self.mapping)
         playlists, warnings = identify_playlists(extracted.playlists)
+        if not playlists:
+            warnings = warnings + (
+                AdapterWarning(
+                    code="empty_import_source",
+                    message="Import source is non-empty but stored no playlists",
+                    detail=str(self.collection_path),
+                ),
+            )
         return ImportResult(playlists=playlists, warnings=extracted.warnings + warnings)
