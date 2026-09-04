@@ -47,7 +47,7 @@ The NixOS module SHALL permit at most one import job to reference a state and SH
 - **THEN** Nix evaluation rejects the configuration before units are generated
 
 ### Requirement: Trigger configured jobs after successful completion
-A job SHALL allow zero or more configured jobs to be named as success targets, and the module SHALL validate the resulting local success graph.
+A job SHALL allow zero or more configured jobs to be named as success targets, and the module SHALL validate the resulting local success graph. A job SHALL also allow a symmetric `onFailure` list rendered as systemd `OnFailure=`, validated the same way.
 
 #### Scenario: One import triggers multiple exports
 - **WHEN** an import job names two export jobs in `onSuccess`
@@ -61,6 +61,11 @@ A job SHALL allow zero or more configured jobs to be named as success targets, a
 #### Scenario: Reject invalid success graph
 - **WHEN** a job names a missing target, itself, or participates in a success cycle
 - **THEN** Nix evaluation rejects the configuration
+
+#### Scenario: Failure fan-out triggers
+- **WHEN** a job lists `onFailure` targets and the instance fails
+- **THEN** systemd activates the listed units
+- **AND** invalid references fail at Nix evaluation like `onSuccess`
 
 #### Scenario: Downstream failure remains independent
 - **WHEN** a success target starts and then fails

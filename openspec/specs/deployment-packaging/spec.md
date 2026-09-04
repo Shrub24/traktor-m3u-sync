@@ -126,3 +126,11 @@ The NixOS module SHALL support Engine DJ for export jobs only and SHALL render s
 - **WHEN** the module generates Engine job configuration rather than using `configFile`
 - **THEN** it validates the required Engine fields at evaluation time
 - **AND** does not create, chown, schedule, or grant access to the configured database path
+
+### Requirement: Render per-job report file arguments
+The NixOS module SHALL support an optional per-job `reportFile` rendered as a `--report-file` argument pair on the generated instance command, preserving argument boundaries for paths containing spaces.
+
+#### Scenario: Job persists its run report
+- **WHEN** a job sets `reportFile`
+- **THEN** the instance command carries `--report-file` with that path as one argument
+- **AND** jobs without `reportFile` carry no such argument

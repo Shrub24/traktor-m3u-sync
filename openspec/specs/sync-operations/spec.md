@@ -91,3 +91,42 @@ The system SHALL run Engine dry-run export against an isolated temporary databas
 - **WHEN** the user runs `export --format engine --dry-run`
 - **THEN** target validation, matching, managed rebuilding, and result reporting execute against the isolated copy
 - **AND** the configured Engine database, retained backup, and store remain unchanged
+
+### Requirement: Emit a machine-readable run report
+The system SHALL support `--report-file PATH` on import and export commands, writing a JSON report after the run completes (including warning-complete and hard-failed runs): command, format, started/finished timestamps (UTC), counts, warnings (code, message, detail), store provenance (source format, imported timestamp), `dry_run` marker on rehearsals, and exit status. Parent directories SHALL be created as needed; a report write failure SHALL warn, never fail the run.
+
+#### Scenario: Report written on success
+- **WHEN** a command completes with `--report-file` pointing at a writable path
+- **THEN** the JSON report exists with counts and warnings matching stdout
+- **AND** the command exit status is unchanged
+
+#### Scenario: Report written on failure
+- **WHEN** a command fails with `--report-file` set
+- **THEN** the report records the true exit status with the error as a structured entry
+- **AND** never claims success
+
+#### Scenario: Report write failure degrades gracefully
+- **WHEN** the report path is not writable
+- **THEN** the command emits a structured warning
+- **AND** the run result and exit status are unaffected
+
+### Requirement: Trace store provenance into export summaries
+The system SHALL record `source_format` and `imported_at` (UTC) in the store `meta` table on every wholesale rebuild, and surface both values in every export summary and run report. Read-mode opens of stores without provenance rows SHALL fail fast with a re-import directive; write-mode opens SHALL reset the disposable schema so the next import rebuilds in place.
+
+#### Scenario: Export shows store origin
+- **WHEN** export reads a store rebuilt by an M3U import
+- **THEN** its summary includes the source format and import timestamp
+
+#### Scenario: Provenance-less store opened for export
+- **WHEN** an old store without provenance rows is opened read-only
+- **THEN** export fails fast with a re-import directive
+
+### Requirement: Warn on structurally empty imports
+The system SHALL emit an `empty_import_source` warning when the import source is non-empty (files present) but yields zero playlists, so strict-mode automation trips on the silent-empty failure class.
+
+#### Scenario: Non-empty dir imports nothing
+- **WHEN** the import directory contains files but zero playlists are stored
+- **THEN** the summary reports zero playlists plus an `empty_import_source` warning
+- **AND** `--fail-on-warning` exits `2`
+
+> Note: the M3U importer gates this warning on files being present (an empty directory stays silent-success). The NML importer warns whenever zero playlists import, since its single collection file is present by construction.
