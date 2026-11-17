@@ -10,3 +10,14 @@ The spike SHALL use an Engine 3.0.2 snapshot as a read-only source of timing and
 #### Scenario: Existing destination
 - **WHEN** the output directory already exists
 - **THEN** the spike refuses to export rather than overwriting it
+
+### Requirement: Rehearse Engine's interactive lifecycle
+The Windows pilot SHALL run in the signed-in DJ user's desktop session. It SHALL request a normal window close only for the Engine process it launched and only after operator confirmation. It SHALL NOT report analysis completion or shut down the VM.
+
+#### Scenario: Engine already running
+- **WHEN** the pilot is started while Engine is already open
+- **THEN** it fails without closing the existing Engine process
+
+#### Scenario: Operator confirms close
+- **WHEN** the operator confirms that Engine should close
+- **THEN** the pilot requests a normal close and reports success only if the launched process exits with status zero within the close timeout
