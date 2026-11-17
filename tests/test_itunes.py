@@ -14,7 +14,7 @@ from traktor_m3u_sync.cli import app
 from traktor_m3u_sync.config import (
     AppConfig,
     ConfigError,
-    ItunesConfig,
+    LibraryXmlConfig,
     M3uConfig,
     NmlConfig,
     StoreConfig,
@@ -547,7 +547,7 @@ def test_itunes_export_fails_fast_on_empty_store(tmp_path: Path) -> None:
 def test_load_config_without_itunes_section(tmp_path: Path) -> None:
     config = load_config(_write_config(tmp_path, with_itunes=False))
 
-    assert config.itunes == ItunesConfig()
+    assert config.itunes == LibraryXmlConfig()
 
 
 def test_itunes_export_overrides_validate_and_win(tmp_path: Path) -> None:
@@ -573,8 +573,8 @@ def test_itunes_export_overrides_validate_and_win(tmp_path: Path) -> None:
 def test_m3u_and_nml_commands_ignore_missing_itunes(tmp_path: Path) -> None:
     config = load_config(_write_config(tmp_path, with_itunes=False))
 
-    assert apply_export_overrides(config, format="m3u").itunes == ItunesConfig()
-    assert apply_export_overrides(config, format="nml").itunes == ItunesConfig()
+    assert apply_export_overrides(config, format="m3u").itunes == LibraryXmlConfig()
+    assert apply_export_overrides(config, format="nml").itunes == LibraryXmlConfig()
 
 
 def test_itunes_export_rejects_relative_location_base(tmp_path: Path) -> None:
@@ -719,7 +719,7 @@ def _app_config(tmp_path: Path) -> AppConfig:
             output_dir=tmp_path / "out",
             import_dir=tmp_path / "in",
         ),
-        itunes=ItunesConfig(
+        itunes=LibraryXmlConfig(
             output_file=tmp_path / "out" / "iTunes Music Library.xml",
             location_base="file://localhost/M:/Music",
             check_base_path=tmp_path / "music",

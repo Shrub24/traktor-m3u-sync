@@ -16,10 +16,29 @@ let
     "nml"
     "m3u"
   ];
-  exportFormats = importFormats ++ [
-    "itunes"
-    "engine"
-  ];
+  libraryXmlFormats = {
+    itunes = "iTunes";
+    rekordbox = "rekordbox";
+  };
+  exportFormats = importFormats ++ builtins.attrNames libraryXmlFormats ++ [ "engine" ];
+
+  libraryXmlOptions = outputExample: {
+    output_file = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = outputExample;
+    };
+    location_base = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "file://localhost/M:/Music";
+    };
+    check_base_path = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "/srv/music";
+    };
+  };
 
   stateModule = lib.types.submodule {
     options.path = lib.mkOption {
@@ -117,23 +136,8 @@ let
         };
       };
 
-      itunes = {
-        output_file = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
-          example = "/data/playlists/iTunes Music Library.xml";
-        };
-        location_base = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
-          example = "file://localhost/M:/Music";
-        };
-        check_base_path = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
-          example = "/srv/music";
-        };
-      };
+      itunes = libraryXmlOptions "/data/playlists/iTunes Music Library.xml";
+      rekordbox = libraryXmlOptions "/data/playlists/rekordbox.xml";
 
       engine = {
         database_path = lib.mkOption {
@@ -161,29 +165,31 @@ let
 
   jobs = cfg.jobs;
   jobNames = builtins.attrNames jobs;
-  selectedFormatSettings = job: {
-    nml = [
-      job.nml.library_root
-      job.nml.collection_path
-      (if job.nml.sandbox_name == "Imported Playlists" then null else job.nml.sandbox_name)
-    ];
-    m3u = [
-      job.m3u.library_root
-      job.m3u.output_dir
-      job.m3u.import_dir
-    ];
-    itunes = [
-      job.itunes.output_file
-      job.itunes.location_base
-      job.itunes.check_base_path
-    ];
-    engine = [
-      job.engine.database_path
-      (if job.engine.track_path_prefix == ".." then null else job.engine.track_path_prefix)
-      (if job.engine.managed_root == "Playlist Sync" then null else job.engine.managed_root)
-      job.engine.check_base_path
-    ];
-  };
+  selectedFormatSettings =
+    job:
+    {
+      nml = [
+        job.nml.library_root
+        job.nml.collection_path
+        (if job.nml.sandbox_name == "Imported Playlists" then null else job.nml.sandbox_name)
+      ];
+      m3u = [
+        job.m3u.library_root
+        job.m3u.output_dir
+        job.m3u.import_dir
+      ];
+      engine = [
+        job.engine.database_path
+        (if job.engine.track_path_prefix == ".." then null else job.engine.track_path_prefix)
+        (if job.engine.managed_root == "Playlist Sync" then null else job.engine.managed_root)
+        job.engine.check_base_path
+      ];
+    }
+    // lib.mapAttrs (format: _: [
+      job.${format}.output_file
+      job.${format}.location_base
+      job.${format}.check_base_path
+    ]) libraryXmlFormats;
 
   validFileUriAuthority =
     authority:
@@ -376,14 +382,16 @@ let
         message = "${prefix}.m3u.output_dir is required for generated M3U export config.";
       }
     ]
-    ++ lib.optionals (generated && job.format == "itunes") [
+    ++ lib.optionals (generated && libraryXmlFormats ? ${job.format}) [
       {
-        assertion = job.itunes.output_file != null;
-        message = "${prefix}.itunes.output_file is required for generated iTunes config.";
+        assertion = job.${job.format}.output_file != null;
+        message = "${prefix}.${job.format}.output_file is required for generated ${
+          libraryXmlFormats.${job.format}
+        } config.";
       }
       {
-        assertion = job.itunes.location_base != null && validFileUri job.itunes.location_base;
-        message = "${prefix}.itunes.location_base must be a complete absolute file: URI.";
+        assertion = job.${job.format}.location_base != null && validFileUri job.${job.format}.location_base;
+        message = "${prefix}.${job.format}.location_base must be a complete absolute file: URI.";
       }
     ]
     ++ lib.optionals (generated && job.format == "engine") [

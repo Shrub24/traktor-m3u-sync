@@ -42,10 +42,10 @@ class M3uConfig:
 
 
 @dataclass(frozen=True)
-class ItunesConfig:
-    # Required only for the iTunes export command, validated per command.
-    # location_base is a complete absolute file: URI; check_base_path is the
-    # optional worker-side mount used only for missing-file warnings.
+class LibraryXmlConfig:
+    # One library XML export target ([itunes] or [rekordbox]), validated only when its
+    # format is selected. location_base is a complete absolute file: URI; check_base_path
+    # is the optional worker-side mount used only for missing-file warnings.
     output_file: Path | None = None
     location_base: str | None = None
     check_base_path: Path | None = None
@@ -68,7 +68,8 @@ class AppConfig:
     nml: NmlConfig
     store: StoreConfig = StoreConfig()
     m3u: M3uConfig = M3uConfig()
-    itunes: ItunesConfig = ItunesConfig()
+    itunes: LibraryXmlConfig = LibraryXmlConfig()
+    rekordbox: LibraryXmlConfig = LibraryXmlConfig()
     engine: EngineConfig = EngineConfig()
 
 
@@ -86,7 +87,6 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
     store_table = _require_table(raw, "store")
     nml_table = _optional_table(raw, "nml")
     m3u_table = _optional_table(raw, "m3u")
-    itunes_table = _optional_table(raw, "itunes")
     engine_table = _optional_table(raw, "engine")
 
     nml_library_root = _optional_string(nml_table, "library_root", "nml")
@@ -106,11 +106,8 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
             output_dir=_optional_path(m3u_table, "output_dir", "m3u"),
             import_dir=_optional_path(m3u_table, "import_dir", "m3u"),
         ),
-        itunes=ItunesConfig(
-            output_file=_optional_path(itunes_table, "output_file", "itunes"),
-            location_base=_optional_string(itunes_table, "location_base", "itunes"),
-            check_base_path=_optional_path(itunes_table, "check_base_path", "itunes"),
-        ),
+        itunes=_library_xml(raw, "itunes"),
+        rekordbox=_library_xml(raw, "rekordbox"),
         engine=EngineConfig(
             database_path=_optional_path(engine_table, "database_path", "engine"),
             track_path_prefix=(
@@ -182,28 +179,18 @@ def apply_export_overrides(
     if format == "nml":
         _require_nml_collection(nml, "export")
         _require_nml_root(nml, "export")
-    itunes = ItunesConfig(
-        output_file=(output_file.expanduser() if output_file else config.itunes.output_file),
-        location_base=location_base or config.itunes.location_base,
-        check_base_path=(
-            check_base_path.expanduser() if check_base_path else config.itunes.check_base_path
-        ),
-    )
-    if format == "itunes":
-        if itunes.output_file is None:
-            raise ConfigError(
-                "output_file is required for iTunes export: "
-                "pass --output-file or set [itunes].output_file"
-            )
-        if itunes.location_base is None:
-            raise ConfigError(
-                "location_base is required for iTunes export: "
-                "pass --location-base or set [itunes].location_base"
-            )
-        try:
-            FileUriMapping(itunes.location_base)
-        except FileUriError as exc:
-            raise ConfigError(str(exc)) from exc
+    library_xml = {"itunes": config.itunes, "rekordbox": config.rekordbox}
+    selected = library_xml.get(format)
+    if selected is not None:
+        selected = LibraryXmlConfig(
+            output_file=output_file.expanduser() if output_file else selected.output_file,
+            location_base=location_base or selected.location_base,
+            check_base_path=(
+                check_base_path.expanduser() if check_base_path else selected.check_base_path
+            ),
+        )
+        _require_library_xml(selected, format)
+        library_xml[format] = selected
     engine = EngineConfig(
         database_path=(
             engine_database.expanduser() if engine_database else config.engine.database_path
@@ -226,9 +213,40 @@ def apply_export_overrides(
         store=_override_store(config.store, store_path),
         nml=replace(nml, sandbox_name=sandbox_name or nml.sandbox_name),
         m3u=m3u,
-        itunes=itunes,
+        itunes=library_xml["itunes"],
+        rekordbox=library_xml["rekordbox"],
         engine=engine,
     )
+
+
+def _library_xml(raw: dict[str, Any], section: str) -> LibraryXmlConfig:
+    table = _optional_table(raw, section)
+    return LibraryXmlConfig(
+        output_file=_optional_path(table, "output_file", section),
+        location_base=_optional_string(table, "location_base", section),
+        check_base_path=_optional_path(table, "check_base_path", section),
+    )
+
+
+def _require_library_xml(config: LibraryXmlConfig, section: str) -> None:
+    label = _LIBRARY_XML_LABELS[section]
+    if config.output_file is None:
+        raise ConfigError(
+            f"output_file is required for {label} export: "
+            f"pass --output-file or set [{section}].output_file"
+        )
+    if config.location_base is None:
+        raise ConfigError(
+            f"location_base is required for {label} export: "
+            f"pass --location-base or set [{section}].location_base"
+        )
+    try:
+        FileUriMapping(config.location_base)
+    except FileUriError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+_LIBRARY_XML_LABELS: Final[dict[str, str]] = {"itunes": "iTunes", "rekordbox": "rekordbox"}
 
 
 def _require_nml_collection(nml: NmlConfig, command: str) -> None:

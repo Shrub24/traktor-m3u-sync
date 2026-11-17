@@ -108,6 +108,15 @@
                             };
                             onFailure = [ "engine" ];
                           };
+                          rekordbox = {
+                            action = "export";
+                            state = "library";
+                            format = "rekordbox";
+                            rekordbox = {
+                              output_file = "/mnt/playlists/rekordbox.xml";
+                              location_base = "file://localhost/M:/Music";
+                            };
+                          };
                           engine = {
                             action = "export";
                             state = "library";
@@ -145,6 +154,7 @@
                 services = evaled.config.systemd.services;
                 ingest = services."traktor-m3u-sync-import@ingest";
                 itunes = services."traktor-m3u-sync-export@itunes";
+                rekordbox = services."traktor-m3u-sync-export@rekordbox";
                 engine = services."traktor-m3u-sync-export@engine";
                 external = services."traktor-m3u-sync-export@external";
                 reporting = services."traktor-m3u-sync-export@reporting";
@@ -286,12 +296,14 @@
                 for config_file in \
                   $(echo '${builtins.elemAt ingest.serviceConfig.ExecStart 1}' | sed 's/.*"--config" "\([^"]*\)".*/\1/') \
                   $(echo '${builtins.elemAt itunes.serviceConfig.ExecStart 1}' | sed 's/.*"--config" "\([^"]*\)".*/\1/') \
+                  $(echo '${builtins.elemAt rekordbox.serviceConfig.ExecStart 1}' | sed 's/.*"--config" "\([^"]*\)".*/\1/') \
                   $(echo '${builtins.elemAt engine.serviceConfig.ExecStart 1}' | sed 's/.*"--config" "\([^"]*\)".*/\1/'); do
                   action=export
                   format=engine
                   case "$config_file" in
                     *ingest*) action=import; format=m3u ;;
                     *itunes*) format=itunes ;;
+                    *rekordbox*) format=rekordbox ;;
                   esac
                   if traktor-m3u-sync "$action" --format "$format" --config "$config_file" > loader.out 2>&1; then
                     echo "FAIL: CLI unexpectedly completed fixture job"

@@ -69,7 +69,7 @@ def import_command(  # noqa: A001 - shadows built-in intentionally for CLI name
 @app.command()
 def export(
     format: str = typer.Option(  # noqa: A002
-        ..., "--format", help="Target format: m3u, nml, itunes, engine"
+        ..., "--format", help="Target format: m3u, nml, itunes, rekordbox, engine"
     ),
     config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
     store: Path | None = typer.Option(None, "--store"),

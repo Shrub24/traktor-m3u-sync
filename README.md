@@ -1,15 +1,15 @@
 # traktor-m3u-sync
 
 CLI worker for synchronizing Traktor Pro playlist collections (`collection.nml`) and standard
-UTF-8 `.m3u8` playlists through a local store, with additional export to iTunes XML and an
-Engine DJ media database for DJ software.
+UTF-8 `.m3u8` playlists through a local store, with additional export to iTunes XML, rekordbox
+XML and an Engine DJ media database for DJ software.
 
 ## Status
 
 **Store-mediated bridge** — every format talks to one internal playlist model through adapters:
 
 ```
-collection.nml ──import──▶ SQLite store ──export──▶ .m3u8 / iTunes XML / Engine m.db
+collection.nml ──import──▶ SQLite store ──export──▶ .m3u8 / iTunes XML / rekordbox XML / Engine m.db
        .m3u8   ──import──▶            ◀──export──  collection.nml
 ```
 
@@ -64,6 +64,11 @@ output_file = "/path/to/iTunes Music Library.xml"   # required for `export --for
 location_base = "file://localhost/M:/Music"         # consumer-facing library root as a full `file:` URI, ditto
 check_base_path = "/path/to/music"                  # optional worker mount, used only for file-missing warnings
 
+[rekordbox]                                         # same keys as [itunes]; required for `export --format rekordbox`
+output_file = "/path/to/rekordbox.xml"
+location_base = "file://localhost/M:/Music"
+check_base_path = "/path/to/music"
+
 [engine]
 database_path = "/path/to/Engine Library/Database2/m.db"  # existing Engine DJ 5.0 media database; required for `export --format engine`
 track_path_prefix = ".."                            # optional, this is the default; prepended to store-relative paths when matching tracks
@@ -89,6 +94,7 @@ traktor-m3u-sync import --format m3u --config traktor-m3u-sync.toml
 traktor-m3u-sync export --format m3u --config traktor-m3u-sync.toml
 traktor-m3u-sync export --format nml --config traktor-m3u-sync.toml
 traktor-m3u-sync export --format itunes --config traktor-m3u-sync.toml
+traktor-m3u-sync export --format rekordbox --config traktor-m3u-sync.toml
 traktor-m3u-sync export --format engine --config traktor-m3u-sync.toml
 ```
 
@@ -112,6 +118,9 @@ traktor-m3u-sync export --format itunes \
   --location-base "file://localhost/M:/Music" \
   --check-base-path /path/to/music
 
+# --output-file, --location-base and --check-base-path apply to the selected format
+# (itunes or rekordbox) and leave the other section unchanged.
+
 traktor-m3u-sync export --format engine \
   --config traktor-m3u-sync.toml \
   --engine-database "/mnt/engine/Engine Library/Database2/m.db" \
@@ -126,7 +135,7 @@ re-import; there are no migrations.
 
 - `export --dry-run` (all formats): validates config and store state, then runs the real
   exporter against isolated temporary targets — a temporary directory (M3U), a temporary XML
-  file (iTunes), a temporary copy of the collection (NML), or a temporary copy of the database
+  file (iTunes, rekordbox), a temporary copy of the collection (NML), or a temporary copy of the database
   (Engine). Output, warnings, and the summary are identical to a real run; the configured
   target, any backup beside it, and the store are left unchanged.
 - `--fail-on-warning` (import and export, opt-in): the command still prints its normal
@@ -135,7 +144,7 @@ re-import; there are no migrations.
 Exit statuses: `0` success (including warnings by default), `1` any error, `2` completed
 with warnings under `--fail-on-warning`.
 
-M3U and iTunes generated targets are published atomically: each write goes to a same-directory
+M3U, iTunes and rekordbox generated targets are published atomically: each write goes to a same-directory
 temporary file and only replaces the target after serialization succeeds. A failed write leaves
 a prior target byte-for-byte unchanged and removes its temporary file. Engine publication is
 stricter because its target is not disposable; see below.
@@ -307,9 +316,9 @@ Store-mediated layers, each a dedicated module under `src/traktor_m3u_sync/`:
 2. **Model** — frozen playlist/track dataclasses plus identity normalization
 3. **Store** — SQLite snapshot of imported playlists (schema-versioned, rebuildable)
 4. **Contracts** — importer/exporter protocols, path-mapping protocol, shared warning/result types
-5. **Paths** — adapter-owned roots translating native path spaces to/from library-relative paths, plus a consumer `file:` URI mapping for iTunes
+5. **Paths** — adapter-owned roots translating native path spaces to/from library-relative paths, plus a consumer `file:` URI mapping for iTunes and rekordbox
 6. **Formats** — `nml` and `m3u` adapters (importer + exporter per format) plus the export-only
-   `itunes` and `engine` adapters; `engine` writes into an existing database rather than a file
+   `itunes`, `rekordbox` and `engine` adapters; `engine` writes into an existing database rather than a file
 7. **Services** — `run_import` / `run_export` orchestration and the CLI surface
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for full details and NML format notes.

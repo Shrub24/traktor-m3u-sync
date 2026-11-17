@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
-from ...contracts import AdapterWarning, SyncResult, playlist_label
+from ...contracts import SyncResult
 from ...fs import write_atomic
-from ...model import Playlist, Track
+from ...model import Playlist
 from ...paths.uri import FileUriMapping
+from ..collection import Collection, collect_tracks
 from .writer import ItunesPlaylistEntry, ItunesTrack, build_document, render_document
 
 FORMAT: Final[str] = "itunes"
@@ -64,57 +65,26 @@ class ItunesExporter:
     check_base_path: Path | None = None
 
     def write(self, playlists: Sequence[Playlist]) -> SyncResult:
-        warnings: list[AdapterWarning] = []
-        skipped = 0
         ids = _IdPool()
-
-        candidates: dict[str, tuple[Track, str]] = {}
-        for playlist in playlists:
-            for track in playlist.tracks:
-                path = track.path
-                if track.identity is None or path is None:
-                    skipped += 1
-                    warnings.append(
-                        AdapterWarning(
-                            code="track_unresolved",
-                            message="Skipping track without a library-relative path",
-                            playlist=playlist_label(playlist.folder_path, playlist.name),
-                            detail=track.raw_path or f"{track.artist} - {track.title}",
-                        )
-                    )
-                    continue
-                candidates.setdefault(track.identity, (track, path))
-
-        tracks: list[ItunesTrack] = []
-        track_ids: dict[str, int] = {}
-        for track_id, identity in enumerate(sorted(candidates), start=1):
-            source, path = candidates[identity]
-            if self.check_base_path is not None:
-                checked = self.check_base_path / path
-                if not checked.exists():
-                    warnings.append(
-                        AdapterWarning(
-                            code="file_missing",
-                            message="Track file not found on the local filesystem",
-                            detail=checked.as_posix(),
-                        )
-                    )
-            track_ids[identity] = track_id
-            tracks.append(
-                ItunesTrack(
-                    track_id=track_id,
-                    persistent_id=ids.allocate(_seed("track", identity)),
-                    name=source.title,
-                    artist=source.artist,
-                    location=self.locations.to_uri(path),
-                    album=source.album,
-                    duration_ms=(
-                        None if source.duration_seconds is None else source.duration_seconds * 1000
-                    ),
-                )
+        collection = collect_tracks(playlists, self.check_base_path)
+        tracks = [
+            ItunesTrack(
+                track_id=entry.track_id,
+                persistent_id=ids.allocate(_seed("track", entry.identity)),
+                name=entry.track.title,
+                artist=entry.track.artist,
+                location=self.locations.to_uri(entry.path),
+                album=entry.track.album,
+                duration_ms=(
+                    None
+                    if entry.track.duration_seconds is None
+                    else entry.track.duration_seconds * 1000
+                ),
             )
+            for entry in collection.tracks
+        ]
 
-        entries = _arrange(playlists, track_ids, ids)
+        entries = _arrange(playlists, collection, ids)
         document = build_document(
             tracks,
             entries,
@@ -127,15 +97,15 @@ class ItunesExporter:
         counts = {
             "playlists_written": len(playlists),
             "tracks_exported": len(tracks),
-            "tracks_skipped": skipped,
-            "warnings_emitted": len(warnings),
+            "tracks_skipped": collection.skipped,
+            "warnings_emitted": len(collection.warnings),
         }
-        return SyncResult(counts=counts, warnings=tuple(warnings))
+        return SyncResult(counts=counts, warnings=tuple(collection.warnings))
 
 
 def _arrange(
     playlists: Sequence[Playlist],
-    track_ids: Mapping[str, int],
+    collection: Collection,
     ids: _IdPool,
 ) -> list[ItunesPlaylistEntry]:
     entries: list[ItunesPlaylistEntry] = [
@@ -145,7 +115,7 @@ def _arrange(
             playlist_id=0,
             persistent_id=ids.allocate(_seed("library", MASTER_PLAYLIST_SEED)),
             name="Library",
-            items=tuple(sorted(track_ids.values())),
+            items=tuple(sorted(collection.ids.values())),
             master=True,
         )
     ]
@@ -173,17 +143,12 @@ def _arrange(
 
     for playlist in playlists:
         parent = add_folders(playlist.folder_path)
-        items = tuple(
-            track_ids[track.identity]
-            for track in playlist.tracks
-            if track.identity is not None and track.identity in track_ids
-        )
         entries.append(
             ItunesPlaylistEntry(
                 playlist_id=0,
                 persistent_id=ids.allocate(_seed("playlist", *playlist.folder_path, playlist.name)),
                 name=playlist.name,
-                items=items,
+                items=collection.playlist_ids(playlist),
                 parent_persistent_id=parent,
             )
         )

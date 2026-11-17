@@ -43,6 +43,13 @@ location_base = "file://localhost/M:/Music"
 # Locations are never derived from it; omit to skip local existence checks.
 # check_base_path = "/srv/music"
 
+[rekordbox]
+# rekordbox "XML file format for playlists sharing" export, same keys as [itunes]
+# (required for `export --format rekordbox`; check_base_path optional).
+output_file = "/path/to/rekordbox.xml"
+location_base = "file://localhost/M:/Music"
+# check_base_path = "/srv/music"
+
 [engine]
 # Existing Engine DJ 5.0 media-drive database to rebuild playlists in
 # (schema 3.0.2, rollback-journal mode, already populated by Engine).

@@ -29,7 +29,7 @@ Job names must match `^[A-Za-z0-9][A-Za-z0-9_-]*$`; names are never silently rew
 |---|---|---|---|
 | `jobs.<name>.action` | `"import"` or `"export"` | required | Exactly one CLI action |
 | `jobs.<name>.state` | string | required | Existing state name |
-| `jobs.<name>.format` | enum | required | Import: `nml`, `m3u`; export: `nml`, `m3u`, `itunes`, `engine` |
+| `jobs.<name>.format` | enum | required | Import: `nml`, `m3u`; export: `nml`, `m3u`, `itunes`, `rekordbox`, `engine` |
 | `jobs.<name>.configFile` | null/string | `null` | External authoritative TOML instead of generated settings |
 | `jobs.<name>.extraArgs` | list of strings | `[]` | Distinct CLI arguments appended after format/config |
 | `jobs.<name>.onSuccess` | list of job names | `[]` | Jobs started only after status 0; missing, self, and cyclic references are rejected |
@@ -44,6 +44,7 @@ Job names must match `^[A-Za-z0-9][A-Za-z0-9_-]*$`; names are never silently rew
 | `jobs.<name>.itunes.output_file` | null/string | `null` | Required for generated iTunes exports |
 | `jobs.<name>.itunes.location_base` | null/string | `null` | Required absolute `file:` URI for iTunes Locations |
 | `jobs.<name>.itunes.check_base_path` | null/string | `null` | Optional worker-side missing-file check root |
+| `jobs.<name>.rekordbox.*` | | | Same options as `itunes.*`, for generated rekordbox XML exports |
 | `jobs.<name>.engine.database_path` | null/string | `null` | Required existing Engine `m.db` path |
 | `jobs.<name>.engine.track_path_prefix` | string | `".."` | Prefix used to match Engine tracks |
 | `jobs.<name>.engine.managed_root` | string | `"Playlist Sync"` | Managed Engine playlist subtree |
