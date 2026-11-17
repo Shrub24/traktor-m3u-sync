@@ -22,8 +22,17 @@ checks on 2026-11-17 established how art is stored:
 - The inserted row is unanalyzed and has no explicit `id`. Engine's own triggers fill in
   the origin columns and the `PerformanceData` row. The track's membership is written in
   the same run.
+- The row carries the tag columns Engine's own import reads (title, artist, album, genre,
+  composer, remixer, label, comment, year, bitrate), read with `mutagen` and marked
+  `isMetadataImported = 1`. Engine never runs its tag import on externally inserted rows,
+  even though it analyzes them.
 - If the file has embedded art, the exporter finds the `AlbumArt` row with that hash, or
-  inserts one with a NULL blob. It then sets `albumArtId` on the new track.
+  inserts one with a NULL blob, and sets `albumArtId` on the new track. A thumbnail missing
+  from `Engine Library/Artwork` is rendered with Pillow and written before the database is
+  published. Engine never renders one for an `AlbumArt` row it did not create, not even on a
+  manual reimport.
+- Files that `mutagen` cannot read are skipped with `track_unreadable`; undecodable pictures
+  insert the track without art and warn `artwork_unreadable`.
 - A new `tracks_inserted` count is reported.
 - `track_missing` warnings now print the path in its original case.
 
@@ -32,7 +41,7 @@ checks on 2026-11-17 established how art is stored:
 - Existing Engine `Track`, `PerformanceData` and `AlbumArt` rows are never modified.
 - Inserted tracks are never deleted. They become part of the Engine library, and later
   runs match them like any other track.
-- No analysis, tag, or cue data is written; Engine does the analysis.
+- No analysis or cue data is written; Engine does the analysis.
 - Art is not read from `cover.jpg`, and Ogg/Opus pictures are not read.
 - No changes to the L: main library. No new configuration option, because
   `check_base_path` already names the worker-side library mount.

@@ -47,6 +47,7 @@
             dependencies = [
               traktor-nml-utils
               python.pkgs.mutagen
+              python.pkgs.pillow
               python.pkgs.typer
             ];
             doCheck = false;

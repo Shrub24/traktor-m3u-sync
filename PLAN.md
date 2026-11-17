@@ -4,7 +4,7 @@
 
 **Phases 0–2 are complete.** The repo has a working Nix-first Python 3.14 environment and store-mediated NML/M3U adapters.
 
-Engine export is implemented and live-validated against Engine DJ 5.0: direct stdlib `sqlite3` writes one existing M: media-drive `m.db` (schema 3.0.2), matches existing Engine tracks and, when `check_base_path` sees the file, inserts unknown ones as unanalyzed rows with embedded album art linked (`engine-track-insertion`). It owns one managed `Playlist Sync` subtree and publishes only while Engine DJ is closed via stage, backup, validation, and atomic replacement. L: mirroring, Engine import, and metadata enrichment remain deferred.
+Engine export is implemented and live-validated against Engine DJ 5.0: direct stdlib `sqlite3` writes one existing M: media-drive `m.db` (schema 3.0.2), matches existing Engine tracks and, when `check_base_path` sees the file, inserts unknown ones as unanalyzed rows carrying their tags, embedded album art and artwork thumbnails (`engine-track-insertion`). It owns one managed `Playlist Sync` subtree and publishes only while Engine DJ is closed via stage, backup, validation, and atomic replacement. L: mirroring, Engine import, and metadata enrichment remain deferred.
 
 Next up: **Phase 3 — Refinement and operational polish**.
 

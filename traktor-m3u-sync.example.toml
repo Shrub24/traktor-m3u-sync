@@ -55,8 +55,8 @@ database_path = "/path/to/Engine Library/Database2/m.db"
 # track_path_prefix = ".."
 
 # Optional worker-side mount of the library. Matched tracks get file-missing warnings;
-# store tracks Engine does not know yet are inserted (with embedded album art) when their
-# file exists here. Omit to skip local checks and insert nothing.
+# store tracks Engine does not know yet are inserted (with tags, embedded album art and an
+# Artwork thumbnail) when their file exists here. Omit to skip local checks and insert nothing.
 # check_base_path = "/srv/storage/media/music/library"
 
 # Top-level Engine playlist subtree owned by exports, rebuilt on every run (default: "Playlist Sync")

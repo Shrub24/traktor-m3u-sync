@@ -11,7 +11,9 @@ export-only registry routing, and dry-run temporary-copy isolation.
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import io
 import os
 import sqlite3
 import stat
@@ -19,7 +21,8 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 import pytest
-from mutagen.id3 import APIC, ID3
+from mutagen.id3 import APIC, COMM, ID3, TALB, TCON, TDRC, TIT2, TPE1, TPUB, Frame
+from PIL import Image
 from typer.testing import CliRunner
 
 from traktor_m3u_sync.cli import app
@@ -1240,57 +1243,101 @@ def test_engine_export_cli_routes_check_base_path_into_warnings(tmp_path: Path) 
 # ── unknown-track insertion ─────────────────────────────────────────────
 
 
-def _mp3(path: Path, picture: bytes | None = None) -> None:
-    """Write a minimal MPEG stream mutagen recognizes, optionally with embedded art."""
+def _library(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Engine Library layout: (m.db, Artwork dir, worker-side music mount)."""
+    engine = tmp_path / "Engine Library/Database2/m.db"
+    engine.parent.mkdir(parents=True)
+    _engine_db(engine)
+    return engine, tmp_path / "Engine Library/Artwork", tmp_path / "mount"
+
+
+def _picture(size: tuple[int, int], mode: str = "RGB") -> bytes:
+    output = io.BytesIO()
+    Image.new(mode, size, "white").save(output, "PNG")
+    return output.getvalue()
+
+
+def _mp3(path: Path, picture: bytes | None = None, frames: tuple[Frame, ...] = ()) -> None:
+    """Write a minimal 128 kbps MPEG stream mutagen recognizes, with optional ID3 frames."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes((b"\xff\xfb\x90\x64" + b"\x00" * 413) * 8)
+    tags = ID3()
+    for frame in frames:
+        tags.add(frame)
     if picture is not None:
-        tags = ID3()
-        tags.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="", data=picture))
-        tags.save(path)
+        tags.add(APIC(encoding=3, mime="image/png", type=3, desc="", data=picture))
+    tags.save(path)
 
 
 def _inserted(connection: sqlite3.Connection) -> list[dict[str, Any]]:
     return _rows(
         connection,
-        "SELECT t.id, t.path, t.filename, t.fileType, t.fileBytes, t.isAnalyzed, "
-        "t.originTrackId, t.originDatabaseUuid, a.hash, a.albumArt, "
+        "SELECT t.*, a.hash, a.albumArt AS blob, "
         "(SELECT COUNT(*) FROM PerformanceData p WHERE p.trackId = t.id) AS performance "
         "FROM Track t LEFT JOIN AlbumArt a ON a.id = t.albumArtId WHERE t.id > ? ORDER BY t.id",
         len(_TRACK_PATHS),
     )
 
 
-def test_inserts_unknown_track_visible_under_check_base_path(tmp_path: Path) -> None:
-    engine = tmp_path / ENGINE_DB
-    _engine_db(engine)
-    mount = tmp_path / "mount"
-    _mp3(mount / "Music/New Song.MP3")
+def _thumbnail(picture: bytes) -> str:
+    digest = hashlib.sha1(picture).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode() + ".jpg"
+
+
+_INSERTED_COLUMNS = (
+    "path filename fileType fileBytes title artist album genre label year comment bitrate "
+    "isAnalyzed isMetadataImported originTrackId originDatabaseUuid albumArtId performance"
+).split()
+
+
+def test_inserts_unknown_track_with_engine_import_metadata(tmp_path: Path) -> None:
+    engine, _, mount = _library(tmp_path)
+    _mp3(
+        mount / "Music/New Song.MP3",
+        frames=(
+            TIT2(encoding=3, text=["New Song"]),
+            TPE1(encoding=3, text=["Vil", "Pushmann"]),
+            TALB(encoding=3, text=["Dafvnk EP"]),
+            TCON(encoding=3, text=["breakbeat", "techno"]),
+            TPUB(encoding=3, text=["Label"]),
+            TDRC(encoding=3, text=["2021-03-04"]),
+            COMM(encoding=3, lang="eng", desc="", text=["liner notes"]),
+        ),
+    )
+    _mp3(mount / "Music/Undated.mp3", frames=(TDRC(encoding=3, text=["0"]),))
     new = _track("Music/New Song.MP3")
     playlists = (
         Playlist("New", (), (_track("Music/One.mp3"), new)),
-        Playlist("Again", (), (new,)),
+        Playlist("Again", (), (new, _track("Music/Undated.mp3"))),
     )
 
     result = EngineExporter(database_path=engine, check_base_path=mount).write(playlists)
 
     assert result.counts["tracks_matched"] == 1
-    assert result.counts["tracks_inserted"] == 1
-    assert result.counts["memberships_written"] == 3
+    assert result.counts["tracks_inserted"] == 2
+    assert result.counts["memberships_written"] == 4
     assert result.counts["memberships_skipped"] == 0
     connection = _open(engine)
-    [row] = _inserted(connection)
-    assert row == {
-        "id": len(_TRACK_PATHS) + 1,
+    row, undated = _inserted(connection)
+    assert undated["year"] is None
+    assert {key: row[key] for key in _INSERTED_COLUMNS} == {
         "path": "../Music/New Song.MP3",
         "filename": "New Song.MP3",
         "fileType": "mp3",
         "fileBytes": (mount / "Music/New Song.MP3").stat().st_size,
+        "title": "New Song",
+        "artist": "Vil Pushmann",
+        "album": "Dafvnk EP",
+        "genre": "breakbeat techno",
+        "label": "Label",
+        "year": 2021,
+        "comment": "liner notes",
+        "bitrate": 128,
         "isAnalyzed": 0,
-        "originTrackId": len(_TRACK_PATHS) + 1,
+        "isMetadataImported": 1,
+        "originTrackId": row["id"],
         "originDatabaseUuid": "engine-uuid",
-        "hash": None,
-        "albumArt": None,
+        "albumArtId": None,
         "performance": 1,
     }
     listed = _rows(
@@ -1301,56 +1348,102 @@ def test_inserts_unknown_track_visible_under_check_base_path(tmp_path: Path) -> 
     assert [e["trackId"] for e in listed] == [1, row["id"]]
 
 
-def test_unknown_track_absent_from_check_base_path_is_skipped(tmp_path: Path) -> None:
-    engine = tmp_path / ENGINE_DB
-    _engine_db(engine)
+def test_unknown_track_absent_or_unreadable_is_skipped(tmp_path: Path) -> None:
+    engine, _, mount = _library(tmp_path)
+    (mount / "Music").mkdir(parents=True)
+    (mount / "Music/Broken.mp3").write_bytes(b"not audio")
 
-    result = EngineExporter(database_path=engine, check_base_path=tmp_path / "mount").write(
-        (Playlist("New", (), (_track("Music/Absent.mp3"),)),)
+    result = EngineExporter(database_path=engine, check_base_path=mount).write(
+        (Playlist("New", (), (_track("Music/Absent.mp3"), _track("Music/Broken.mp3"))),)
     )
 
     assert result.counts["tracks_inserted"] == 0
-    assert result.counts["skipped_missing"] == 1
+    assert result.counts["skipped_missing"] == 2
     assert [(w.code, w.detail) for w in result.warnings] == [
-        ("track_missing", "../Music/Absent.mp3")
+        ("track_missing", "../Music/Absent.mp3"),
+        ("track_unreadable", (mount / "Music/Broken.mp3").as_posix()),
+        ("track_missing", "../Music/Broken.mp3"),
     ]
     assert _inserted(_open(engine)) == []
 
 
-def test_inserted_tracks_link_album_art_by_embedded_picture_hash(tmp_path: Path) -> None:
-    engine = tmp_path / ENGINE_DB
-    _engine_db(engine)
-    known, fresh = b"known-cover", b"fresh-cover"
+def test_inserted_tracks_link_art_and_publish_missing_thumbnails(tmp_path: Path) -> None:
+    engine, artwork, mount = _library(tmp_path)
+    cached, uncached, fresh, small, gray = (
+        _picture((300, 300)),
+        _picture((301, 301)),
+        _picture((512, 256)),
+        _picture((75, 75)),
+        _picture((300, 300), "L"),
+    )
     with _open(engine) as connection:
-        connection.execute(
-            "INSERT INTO AlbumArt (hash) VALUES (?)", (hashlib.sha1(known).digest(),)
-        )
-    mount = tmp_path / "mount"
-    _mp3(mount / "A/1.mp3", known)
-    _mp3(mount / "B/1.mp3", fresh)
-    _mp3(mount / "B/2.mp3", fresh)
-    _mp3(mount / "C/1.mp3")
-    tracks = tuple(_track(p) for p in ("A/1.mp3", "B/1.mp3", "B/2.mp3", "C/1.mp3"))
+        for picture in (cached, uncached):
+            connection.execute(
+                "INSERT INTO AlbumArt (hash) VALUES (?)", (hashlib.sha1(picture).digest(),)
+            )
+    artwork.mkdir()
+    cached_thumbnail = artwork / _thumbnail(cached)
+    cached_thumbnail.write_bytes(b"engine's own thumbnail")
+    pictures = {"A": cached, "B": uncached, "C": fresh, "D": fresh, "E": small, "F": gray}
+    for folder, picture in pictures.items():
+        _mp3(mount / f"{folder}/1.mp3", picture)
+    _mp3(mount / "G/1.mp3")
+    tracks = tuple(_track(f"{folder}/1.mp3") for folder in "ABCDEFG")
 
     EngineExporter(database_path=engine, check_base_path=mount).write(
         (Playlist("Art", (), tracks),)
     )
 
     connection = _open(engine)
-    assert [(r["path"], r["hash"], r["albumArt"]) for r in _inserted(connection)] == [
-        ("../A/1.mp3", hashlib.sha1(known).digest(), None),
-        ("../B/1.mp3", hashlib.sha1(fresh).digest(), None),
-        ("../B/2.mp3", hashlib.sha1(fresh).digest(), None),
-        ("../C/1.mp3", None, None),
+    assert [(r["hash"], r["blob"]) for r in _inserted(connection)] == [
+        *((hashlib.sha1(picture).digest(), None) for picture in pictures.values()),
+        (None, None),
     ]
-    assert _scalar(connection, "SELECT COUNT(*) FROM AlbumArt") == 2
+    assert _scalar(connection, "SELECT COUNT(*) FROM AlbumArt") == 5
+    assert cached_thumbnail.read_bytes() == b"engine's own thumbnail"
+    rendered = {folder: Image.open(artwork / _thumbnail(pictures[folder])) for folder in "BCEF"}
+    assert {folder: (i.format, i.size, i.mode) for folder, i in rendered.items()} == {
+        "B": ("JPEG", (256, 256), "RGB"),
+        "C": ("JPEG", (256, 128), "RGB"),
+        "E": ("JPEG", (75, 75), "RGB"),
+        "F": ("JPEG", (256, 256), "L"),
+    }
+    assert len(list(artwork.iterdir())) == 5
+
+
+def test_undecodable_picture_inserts_track_without_art(tmp_path: Path) -> None:
+    engine, artwork, mount = _library(tmp_path)
+    _mp3(mount / "A/1.mp3", b"not an image")
+
+    result = EngineExporter(database_path=engine, check_base_path=mount).write(
+        (Playlist("Art", (), (_track("A/1.mp3"),)),)
+    )
+
+    assert result.counts["tracks_inserted"] == 1
+    assert [w.code for w in result.warnings] == ["artwork_unreadable"]
+    [row] = _inserted(_open(engine))
+    assert row["albumArtId"] is None
+    assert not artwork.exists()
+
+
+def test_thumbnail_write_failure_leaves_database_unpublished(tmp_path: Path) -> None:
+    engine, artwork, mount = _library(tmp_path)
+    artwork.write_bytes(b"not a directory")
+    _mp3(mount / "A/1.mp3", _picture((300, 300)))
+    original = engine.read_bytes()
+
+    with pytest.raises(OSError):
+        EngineExporter(database_path=engine, check_base_path=mount).write(
+            (Playlist("Art", (), (_track("A/1.mp3"),)),)
+        )
+
+    assert engine.read_bytes() == original
+    assert sorted(p.name for p in engine.parent.iterdir()) == ["m.db"]
 
 
 def test_rerun_matches_previously_inserted_tracks(tmp_path: Path) -> None:
-    engine = tmp_path / ENGINE_DB
-    _engine_db(engine)
-    mount = tmp_path / "mount"
-    _mp3(mount / "Music/New.mp3", b"cover")
+    engine, artwork, mount = _library(tmp_path)
+    _mp3(mount / "Music/New.mp3", _picture((300, 300)))
     exporter = EngineExporter(database_path=engine, check_base_path=mount)
     playlists = (Playlist("New", (), (_track("Music/New.mp3"),)),)
 
@@ -1362,6 +1455,27 @@ def test_rerun_matches_previously_inserted_tracks(tmp_path: Path) -> None:
     connection = _open(engine)
     assert len(_inserted(connection)) == 1
     assert _scalar(connection, "SELECT COUNT(*) FROM AlbumArt") == 1
+    assert len(list(artwork.iterdir())) == 1
+
+
+def test_engine_dry_run_writes_no_configured_artwork(tmp_path: Path) -> None:
+    engine, artwork, mount = _library(tmp_path)
+    _mp3(mount / "Music/New.mp3", _picture((300, 300)))
+    config = load_config(
+        _write_toml(
+            tmp_path,
+            f'[engine]\ndatabase_path = "{engine}"\ncheck_base_path = "{mount}"\n',
+        )
+    )
+    with PlaylistStore(tmp_path / "store.db") as store:
+        store.rebuild((Playlist("New", (), (_track("Music/New.mp3"),)),), source_format="m3u")
+    original = engine.read_bytes()
+
+    dry = run_export(config, "engine", dry_run=True)
+
+    assert dry.counts["tracks_inserted"] == 1
+    assert engine.read_bytes() == original
+    assert not artwork.exists()
 
 
 def _write_toml(tmp_path: Path, engine_text: str | None = None) -> Path:

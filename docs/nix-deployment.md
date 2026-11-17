@@ -126,7 +126,7 @@ journalctl -u traktor-m3u-sync-export@engine.service
 
 Every command records its store origin (`source_format`, `imported_at`) in export summaries, and `--report-file` (or per-job `reportFile`) persists a JSON run report with counts, warnings, provenance, and exit status — including a report on hard failures and a `dry_run` marker on rehearsals. An import whose non-empty source yields zero playlists warns `empty_import_source`, so strict-mode automation trips on silent-empty scans.
 
-Engine DJ must remain closed for an Engine export. The module does not create, chown, mount, schedule, or grant access to its database. The shared service identity needs access to every state and adapter path; Engine publication additionally needs create-and-rename access in the database directory, and read access to `check_base_path` when unknown tracks are inserted.
+Engine DJ must remain closed for an Engine export. The module does not create, chown, mount, schedule, or grant access to its database. The shared service identity needs access to every state and adapter path; Engine publication additionally needs create-and-rename access in the database directory, and, when unknown tracks are inserted, read access to `check_base_path` plus create-and-rename access in the sibling `Engine Library/Artwork` directory.
 
 ## Downstream orchestration examples
 

@@ -21,7 +21,7 @@ Current limitations:
 
 - smartlists are skipped with warnings during NML import
 - Engine export is M-only: it writes one media-drive `m.db` and mirrors no L: main-library database
-- Engine export inserts tracks Engine has not discovered yet only when `[engine].check_base_path` can see the file; it writes no analysis (Engine analyzes inserted tracks on its next start) and links only embedded album art
+- Engine export inserts tracks Engine has not discovered yet only when `[engine].check_base_path` can see the file; it writes their tags, embedded album art and artwork thumbnail but no analysis (Engine analyzes inserted tracks on its next start)
 - sanitized-name mismatch is a documented limitation (original names are not restored on import)
 - reporting is structured stdout/stderr only for now
 - no incremental sync; every import replaces the whole snapshot
@@ -257,9 +257,11 @@ Engine DJ 5.0 keeps playlists in SQLite, so this export mutates a database inste
 - targets only the media-drive database named by `[engine].database_path`; the L: main-library
   database is never mirrored
 - matches store paths as `<track_path_prefix>/<store-relative-path>` against `Track` rows that
-  already exist in that database; missing, unresolved, ambiguous, and duplicate references warn
-  and skip instead of creating tracks
-- never creates a database or mutates Engine analysis, cues, waveforms, artwork, or tags
+  already exist in that database; when `[engine].check_base_path` can see an unmatched file it
+  inserts the track with its tags and embedded art, writing any missing thumbnail to the sibling
+  `Engine Library/Artwork` directory before publishing; other missing, unresolved, ambiguous, and
+  duplicate references warn and skip
+- never creates a database or modifies existing Engine tracks, analysis, cues, waveforms, artwork, or tags
 - owns exactly one top-level subtree (`[engine].managed_root`), rebuilt idempotently while
   unrelated Engine playlists stay untouched
 - requires schema 3.0.2 in rollback-journal (`DELETE`) mode; anything else fails before staging

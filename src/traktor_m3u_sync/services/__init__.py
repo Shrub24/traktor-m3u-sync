@@ -67,7 +67,9 @@ def _dry_run_config(config: AppConfig, format: str, sandbox: Path) -> AppConfig:
         # Guard the configured target before sandboxing: the copy alone would hide
         # live Engine sidecars and a missing database would surface only as a temp path.
         engine.preflight_target(database)
-        copy = sandbox / database.name
+        # Keep the Engine Library layout so artwork resolves to the sandbox, not the library.
+        copy = sandbox / database.parent.name / database.name
+        copy.parent.mkdir()
         shutil.copy2(database, copy)
         return replace(config, engine=replace(config.engine, database_path=copy))
     collection = _require(config.nml.collection_path, "collection_path")

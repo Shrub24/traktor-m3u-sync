@@ -4,8 +4,11 @@ The writer rebuilds one managed playlist subtree inside an existing schema 3.0.2
 database in rollback-journal (``DELETE``) mode, never creating the database or replaying
 Engine DDL. Existing ``Track``/``PerformanceData`` rows are never modified; store tracks
 Engine does not know yet are inserted as unanalyzed rows (Engine's own triggers create
-their origin and performance-data rows) when the worker can see the file, so Engine
-analyzes them on its next start. Publication is
+their origin and performance-data rows) when the worker can see the file, carrying the
+tags and artwork Engine's own import would read, so Engine only analyzes them on its next
+start. Missing artwork thumbnails are written to ``<Engine Library>/Artwork`` before the
+database is published, so a published row never references an absent thumbnail.
+Publication is
 database-specific and intentionally stronger than generated-file publication: the target
 is validated read-only first, a mode-preserving same-directory copy is rebuilt in one
 transaction and re-validated, an adjacent backup is refreshed from the validated prior
@@ -23,6 +26,7 @@ write.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import shutil
 import sqlite3
@@ -34,8 +38,9 @@ from pathlib import Path, PurePosixPath
 from typing import Final
 
 from ...contracts import AdapterWarning, playlist_label
+from ...fs import write_atomic
 from ...model import Playlist, Track
-from .artwork import embedded_picture_hash
+from .media import Media, read_media, render_thumbnail, thumbnail_name
 
 SCHEMA_VERSION: Final[tuple[int, int, int]] = (3, 0, 2)
 BACKUP_SUFFIX: Final[str] = ".playlist-sync.bak"
@@ -63,6 +68,8 @@ class WriteOutcome:
     skipped_ambiguous: int
     skipped_duplicate: int
     warnings: tuple[AdapterWarning, ...]
+    # Artwork-cache file name -> JPEG bytes, for thumbnails Engine does not have yet.
+    thumbnails: dict[str, bytes]
 
 
 def write_database(
@@ -81,10 +88,15 @@ def write_database(
     mode = os.stat(database_path).st_mode & 0o777
     backup_path = database_path.with_name(database_path.name + BACKUP_SUFFIX)
     stage = _create_stage(database_path, mode)
+    artwork_dir = database_path.parent.parent / "Artwork"
     published = False
     try:
-        outcome = _rebuild_stage(stage, playlists, managed_root, track_path_prefix, check_base_path)
+        outcome = _rebuild_stage(
+            stage, playlists, managed_root, track_path_prefix, check_base_path, artwork_dir
+        )
         _validate_staged(stage)
+        for name, thumbnail in outcome.thumbnails.items():
+            write_atomic(artwork_dir / name, thumbnail)
         _refresh_backup(database_path, backup_path, mode)
         _publish_stage(stage, database_path)
         published = True
@@ -142,6 +154,7 @@ def _rebuild_stage(
     managed_root: str,
     track_path_prefix: str,
     check_base_path: Path | None,
+    artwork_dir: Path,
 ) -> WriteOutcome:
     connection = _connect(stage)
     try:
@@ -153,6 +166,7 @@ def _rebuild_stage(
             managed_root=managed_root,
             track_path_prefix=track_path_prefix,
             check_base_path=check_base_path,
+            artwork_dir=artwork_dir,
         )
         _validate_database(connection)
         connection.commit()
@@ -305,7 +319,8 @@ def rebuild_managed_subtree(
     *,
     managed_root: str,
     track_path_prefix: str,
-    check_base_path: Path | None = None,
+    check_base_path: Path | None,
+    artwork_dir: Path,
 ) -> WriteOutcome:
     """Delete and rebuild exactly one managed subtree within an open transaction."""
     information = connection.execute("SELECT uuid FROM Information").fetchone()
@@ -331,6 +346,7 @@ def rebuild_managed_subtree(
     leaf_orders: dict[int, list[int]] = {}
     matched: set[str] = set()
     inserted: set[str] = set()
+    thumbnails: dict[str, bytes] = {}
     warnings: list[AdapterWarning] = []
     skipped = {"unresolved": 0, "missing": 0, "ambiguous": 0, "duplicate": 0}
     memberships = 0
@@ -364,10 +380,24 @@ def rebuild_managed_subtree(
             track_id = track_ids.get(key)
             if key not in track_ids and check_base_path is not None and track.path is not None:
                 source = check_base_path / track.path
-                if source.is_file():
-                    track_id = _insert_track(connection, engine_path, source, int(now.timestamp()))
+                media = read_media(source) if source.is_file() else None
+                if media is not None:
+                    art_id = _album_art_id(
+                        connection, media, source, artwork_dir, thumbnails, warnings
+                    )
+                    track_id = _insert_track(
+                        connection, engine_path, source, media, art_id, int(now.timestamp())
+                    )
                     track_ids[key] = track_id
                     inserted.add(key)
+                elif source.is_file():
+                    warnings.append(
+                        AdapterWarning(
+                            code="track_unreadable",
+                            message="Track file has no readable audio tags; not inserted",
+                            detail=source.as_posix(),
+                        )
+                    )
             if track_id is None:
                 ambiguous = key in track_ids
                 skipped["ambiguous" if ambiguous else "missing"] += 1
@@ -433,6 +463,7 @@ def rebuild_managed_subtree(
         skipped_ambiguous=skipped["ambiguous"],
         skipped_duplicate=skipped["duplicate"],
         warnings=tuple(warnings),
+        thumbnails=thumbnails,
     )
 
 
@@ -490,25 +521,39 @@ def _engine_path(prefix: str, relative_path: str) -> str:
 
 
 def _insert_track(
-    connection: sqlite3.Connection, engine_path: str, source: Path, added: int
+    connection: sqlite3.Connection,
+    engine_path: str,
+    source: Path,
+    media: Media,
+    art_id: int | None,
+    added: int,
 ) -> int:
     # No explicit id: Engine's trigger aborts recycled ids and stamps origin from the new one.
-    # isAnalyzed = 0 queues Engine's own analysis on its next start.
+    # isAnalyzed = 0 queues Engine's own analysis on its next start; isMetadataImported = 1
+    # because the tags were read here, as Engine's import would.
+    columns: dict[str, object] = {
+        "path": engine_path,
+        "filename": source.name,
+        "fileType": source.suffix.removeprefix(".").casefold(),
+        "fileBytes": source.stat().st_size,
+        "dateCreated": added,
+        "dateAdded": added,
+        "isAnalyzed": 0,
+        "isAvailable": 1,
+        "isMetadataImported": 1,
+        "albumArtId": art_id,
+        "isPlayed": 0,
+        "isMetadataOfPackedTrackChanged": 0,
+        "isPerfomanceDataOfPackedTrackChanged": 0,
+        "isBeatGridLocked": 0,
+        "streamingFlags": 0,
+        "explicitLyrics": 0,
+        "rating": 0,
+        **media.columns,
+    }
     cursor = connection.execute(
-        "INSERT INTO Track (path, filename, fileType, fileBytes, dateCreated, dateAdded, "
-        "isAnalyzed, isAvailable, isMetadataImported, albumArtId, isPlayed, "
-        "isMetadataOfPackedTrackChanged, isPerfomanceDataOfPackedTrackChanged, "
-        "isBeatGridLocked, streamingFlags, explicitLyrics, rating) "
-        "VALUES (?, ?, ?, ?, ?, ?, 0, 1, 0, ?, 0, 0, 0, 0, 0, 0, 0)",
-        (
-            engine_path,
-            source.name,
-            source.suffix.removeprefix(".").casefold(),
-            source.stat().st_size,
-            added,
-            added,
-            _album_art_id(connection, source),
-        ),
+        f"INSERT INTO Track ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})",
+        tuple(columns.values()),
     )
     track_id = int(cursor.lastrowid or 0)
     if track_id == 0:
@@ -516,10 +561,30 @@ def _insert_track(
     return track_id
 
 
-def _album_art_id(connection: sqlite3.Connection, source: Path) -> int | None:
-    digest = embedded_picture_hash(source)
-    if digest is None:
+def _album_art_id(
+    connection: sqlite3.Connection,
+    media: Media,
+    source: Path,
+    artwork_dir: Path,
+    thumbnails: dict[str, bytes],
+    warnings: list[AdapterWarning],
+) -> int | None:
+    if media.picture is None:
         return None
+    digest = hashlib.sha1(media.picture).digest()
+    name = thumbnail_name(digest)
+    if name not in thumbnails and not (artwork_dir / name).exists():
+        try:
+            thumbnails[name] = render_thumbnail(media.picture)
+        except OSError:
+            warnings.append(
+                AdapterWarning(
+                    code="artwork_unreadable",
+                    message="Embedded picture could not be decoded; track inserted without art",
+                    detail=source.as_posix(),
+                )
+            )
+            return None
     row = connection.execute("SELECT id FROM AlbumArt WHERE hash = ?", (digest,)).fetchone()
     if row is not None:
         return int(row[0])

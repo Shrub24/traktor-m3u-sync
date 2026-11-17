@@ -47,13 +47,24 @@ When `check_base_path` is configured, the system SHALL insert one unanalyzed Eng
 - **THEN** export inserts one unanalyzed `Track` row and writes the membership
 - **AND** reports it under `tracks_inserted`
 
-#### Scenario: Unknown track file absent
-- **WHEN** a stored track matches no Engine track and its file does not exist under `check_base_path`
-- **THEN** no row is inserted and the membership is skipped with `track_missing`
+#### Scenario: Unknown track file absent or unreadable
+- **WHEN** a stored track matches no Engine track and its file does not exist under `check_base_path`, or has no readable audio tags
+- **THEN** no row is inserted and the membership is skipped with `track_missing`, preceded by `track_unreadable` for an unreadable file
 
 #### Scenario: Repeated export after insertion
 - **WHEN** export runs again with an unchanged store
 - **THEN** the previously inserted rows are matched and no further rows are inserted
+
+### Requirement: Carry Engine's imported metadata on inserted tracks
+Each inserted track SHALL carry the columns Engine's own tag import writes: title, artist, album, genre, composer, remixer, label, comment, year and bitrate. Multi-valued tags SHALL be joined with a single space, and the row SHALL be marked `isMetadataImported = 1`.
+
+#### Scenario: Tagged file inserted
+- **WHEN** an inserted track's file carries tags
+- **THEN** the row holds the tag values as Engine's import would and is marked as metadata-imported
+
+#### Scenario: Zero year
+- **WHEN** the file's year tag is zero
+- **THEN** the row's `year` stays NULL
 
 ### Requirement: Link embedded album art for inserted tracks
 For each inserted track whose file embeds a picture, the system SHALL set `albumArtId` to the `AlbumArt` row whose `hash` is the SHA-1 of the first embedded picture's bytes. If no such row exists, it SHALL insert one with that hash and a NULL blob. Tracks without embedded art SHALL keep a NULL `albumArtId`.
@@ -65,3 +76,22 @@ For each inserted track whose file embeds a picture, the system SHALL set `album
 #### Scenario: New picture
 - **WHEN** inserted tracks embed a picture with no matching `AlbumArt` row
 - **THEN** export inserts one `AlbumArt` row for that hash, and every such track references it
+
+#### Scenario: Undecodable picture
+- **WHEN** an inserted track's embedded picture cannot be decoded
+- **THEN** the track is inserted without art and export warns `artwork_unreadable`
+
+### Requirement: Publish missing artwork thumbnails before the database
+For each linked picture whose `<Engine Library>/Artwork/<unpadded base64url(hash)>.jpg` is absent, the system SHALL render a JPEG that fits within 256×256 without upscaling, keeping grayscale images grayscale. It SHALL write that file before the database is published and SHALL NOT overwrite existing thumbnails. `<Engine Library>` is the parent of the database's directory. A dry run SHALL write thumbnails only inside its sandbox.
+
+#### Scenario: Thumbnail missing
+- **WHEN** an inserted track links a picture whose thumbnail file is absent
+- **THEN** export writes the rendered thumbnail before publishing the database
+
+#### Scenario: Thumbnail write fails
+- **WHEN** a thumbnail cannot be written
+- **THEN** export fails and the database is left unpublished
+
+#### Scenario: Dry run
+- **WHEN** export runs with `--dry-run`
+- **THEN** no thumbnail is written to the configured Engine Library
