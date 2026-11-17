@@ -10,6 +10,7 @@ readme = "README.md"
 license = "GPL-3.0-or-later"
 requires-python = ">=3.14"
 dependencies = [
+  "mutagen>=1.47.0",
   "traktor-nml-utils>=4.1.0",
   "typer>=0.16.0",
 ]

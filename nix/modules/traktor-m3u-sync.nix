@@ -153,7 +153,7 @@ let
           type = lib.types.nullOr lib.types.str;
           default = null;
           example = "/srv/music";
-          description = "Worker-side mount used only for missing-file warnings.";
+          description = "Worker-side library mount for missing-file warnings and for inserting tracks Engine does not know yet.";
         };
       };
     };

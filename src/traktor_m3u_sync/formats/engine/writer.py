@@ -1,8 +1,11 @@
 """Direct-SQLite Engine DJ 5.0 media-database writer with safe atomic publication.
 
-The writer mutates only one managed playlist subtree inside an existing schema 3.0.2
-media database in rollback-journal (``DELETE``) mode, never creating the database,
-replaying Engine DDL, or touching ``Track``/``PerformanceData`` rows. Publication is
+The writer rebuilds one managed playlist subtree inside an existing schema 3.0.2 media
+database in rollback-journal (``DELETE``) mode, never creating the database or replaying
+Engine DDL. Existing ``Track``/``PerformanceData`` rows are never modified; store tracks
+Engine does not know yet are inserted as unanalyzed rows (Engine's own triggers create
+their origin and performance-data rows) when the worker can see the file, so Engine
+analyzes them on its next start. Publication is
 database-specific and intentionally stronger than generated-file publication: the target
 is validated read-only first, a mode-preserving same-directory copy is rebuilt in one
 transaction and re-validated, an adjacent backup is refreshed from the validated prior
@@ -32,6 +35,7 @@ from typing import Final
 
 from ...contracts import AdapterWarning, playlist_label
 from ...model import Playlist, Track
+from .artwork import embedded_picture_hash
 
 SCHEMA_VERSION: Final[tuple[int, int, int]] = (3, 0, 2)
 BACKUP_SUFFIX: Final[str] = ".playlist-sync.bak"
@@ -40,7 +44,7 @@ ACTIVE_EXPORT_MESSAGE: Final[str] = (
 )
 
 _REQUIRED_TABLES: Final[frozenset[str]] = frozenset(
-    {"Information", "Track", "Playlist", "PlaylistEntity"}
+    {"Information", "Track", "AlbumArt", "Playlist", "PlaylistEntity"}
 )
 
 
@@ -52,6 +56,7 @@ class EngineWriteError(RuntimeError):
 class WriteOutcome:
     playlists_written: int
     tracks_matched: int
+    tracks_inserted: int
     memberships_written: int
     skipped_unresolved: int
     skipped_missing: int
@@ -318,12 +323,14 @@ def rebuild_managed_subtree(
         connection.execute("DELETE FROM Playlist WHERE id = ?", (int(existing[0][0]),))
         _reject_orphans(connection)
 
-    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(UTC)
+    timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
     root_id = _insert_playlist(connection, managed_root, 0, timestamp)
     node_ids: dict[tuple[str, ...], int] = {(): root_id}
     children: dict[int, list[int]] = {root_id: []}
     leaf_orders: dict[int, list[int]] = {}
     matched: set[str] = set()
+    inserted: set[str] = set()
     warnings: list[AdapterWarning] = []
     skipped = {"unresolved": 0, "missing": 0, "ambiguous": 0, "duplicate": 0}
     memberships = 0
@@ -353,9 +360,16 @@ def rebuild_managed_subtree(
             engine_path = _resolve_engine_path(track, track_path_prefix, label, warnings, skipped)
             if engine_path is None:
                 continue
-            track_id = track_ids.get(engine_path)
+            key = _normalize_key(engine_path)
+            track_id = track_ids.get(key)
+            if key not in track_ids and check_base_path is not None and track.path is not None:
+                source = check_base_path / track.path
+                if source.is_file():
+                    track_id = _insert_track(connection, engine_path, source, int(now.timestamp()))
+                    track_ids[key] = track_id
+                    inserted.add(key)
             if track_id is None:
-                ambiguous = engine_path in track_ids
+                ambiguous = key in track_ids
                 skipped["ambiguous" if ambiguous else "missing"] += 1
                 warnings.append(
                     _skip_warning(
@@ -368,7 +382,7 @@ def rebuild_managed_subtree(
                     )
                 )
                 continue
-            matched.add(engine_path)
+            matched.add(key)
             if track_id in seen:
                 skipped["duplicate"] += 1
                 warnings.append(
@@ -411,7 +425,8 @@ def rebuild_managed_subtree(
     _validate_managed_tree(connection, root_id, children, leaf_orders, database_uuid)
     return WriteOutcome(
         playlists_written=len(playlists),
-        tracks_matched=len(matched),
+        tracks_matched=len(matched - inserted),
+        tracks_inserted=len(inserted),
         memberships_written=memberships,
         skipped_unresolved=skipped["unresolved"],
         skipped_missing=skipped["missing"],
@@ -451,7 +466,7 @@ def _resolve_engine_path(
             )
         )
         return None
-    return _normalize_key(_engine_path(track_path_prefix, track.path))
+    return _engine_path(track_path_prefix, track.path)
 
 
 def _skip_warning(code: str, message: str, label: str, detail: str) -> AdapterWarning:
@@ -472,6 +487,44 @@ def _normalize_key(path_text: str) -> str:
 
 def _engine_path(prefix: str, relative_path: str) -> str:
     return str(PurePosixPath(prefix) / PurePosixPath(relative_path))
+
+
+def _insert_track(
+    connection: sqlite3.Connection, engine_path: str, source: Path, added: int
+) -> int:
+    # No explicit id: Engine's trigger aborts recycled ids and stamps origin from the new one.
+    # isAnalyzed = 0 queues Engine's own analysis on its next start.
+    cursor = connection.execute(
+        "INSERT INTO Track (path, filename, fileType, fileBytes, dateCreated, dateAdded, "
+        "isAnalyzed, isAvailable, isMetadataImported, albumArtId, isPlayed, "
+        "isMetadataOfPackedTrackChanged, isPerfomanceDataOfPackedTrackChanged, "
+        "isBeatGridLocked, streamingFlags, explicitLyrics, rating) "
+        "VALUES (?, ?, ?, ?, ?, ?, 0, 1, 0, ?, 0, 0, 0, 0, 0, 0, 0)",
+        (
+            engine_path,
+            source.name,
+            source.suffix.removeprefix(".").casefold(),
+            source.stat().st_size,
+            added,
+            added,
+            _album_art_id(connection, source),
+        ),
+    )
+    track_id = int(cursor.lastrowid or 0)
+    if track_id == 0:
+        raise EngineWriteError(f"Engine did not allocate a track ID for {engine_path!r}")
+    return track_id
+
+
+def _album_art_id(connection: sqlite3.Connection, source: Path) -> int | None:
+    digest = embedded_picture_hash(source)
+    if digest is None:
+        return None
+    row = connection.execute("SELECT id FROM AlbumArt WHERE hash = ?", (digest,)).fetchone()
+    if row is not None:
+        return int(row[0])
+    cursor = connection.execute("INSERT INTO AlbumArt (hash, albumArt) VALUES (?, NULL)", (digest,))
+    return int(cursor.lastrowid or 0)
 
 
 def _insert_playlist(

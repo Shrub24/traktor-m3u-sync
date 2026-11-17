@@ -19,7 +19,8 @@ class EngineExporter:
     database_path: Path
     track_path_prefix: str = ".."
     managed_root: str = "Playlist Sync"
-    # Optional worker-side mount; used only for file_missing warnings, never for matching.
+    # Optional worker-side library mount: file_missing warnings, and the files that
+    # unknown tracks are inserted from.
     check_base_path: Path | None = None
 
     def write(self, playlists: Sequence[Playlist]) -> SyncResult:
@@ -37,6 +38,7 @@ def _result(outcome: WriteOutcome) -> SyncResult:
     counts = {
         "playlists_written": outcome.playlists_written,
         "tracks_matched": outcome.tracks_matched,
+        "tracks_inserted": outcome.tracks_inserted,
         "memberships_written": outcome.memberships_written,
         "memberships_skipped": (
             outcome.skipped_unresolved

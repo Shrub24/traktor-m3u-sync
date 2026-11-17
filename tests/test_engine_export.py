@@ -11,6 +11,7 @@ export-only registry routing, and dry-run temporary-copy isolation.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sqlite3
 import stat
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 import pytest
+from mutagen.id3 import APIC, ID3
 from typer.testing import CliRunner
 
 from traktor_m3u_sync.cli import app
@@ -55,9 +57,9 @@ class _WriteArgs(TypedDict):
 
 ARGS: _WriteArgs = {"managed_root": MANAGED_ROOT, "track_path_prefix": ".."}
 
-# Mirrors Engine 5.0 media schema 3.0.2 playlist primitives closely enough to exercise the
-# authoritative linked-list maintenance triggers, plus a PerformanceData table to prove
-# Engine-owned analysis rows are never touched.
+# Mirrors Engine 5.0 media schema 3.0.2 (Track, AlbumArt and PerformanceData verbatim from a
+# live m.db, playlist primitives) closely enough to exercise Engine's own track and
+# linked-list triggers and to prove Engine-owned rows are never modified.
 _ENGINE_SCHEMA = """
 CREATE TABLE Information (
   uuid TEXT NOT NULL,
@@ -65,11 +67,42 @@ CREATE TABLE Information (
   schemaVersionMinor INTEGER NOT NULL,
   schemaVersionPatch INTEGER NOT NULL
 );
-CREATE TABLE Track (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT UNIQUE);
-CREATE TABLE PerformanceData (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  durationMeasurements TEXT
+CREATE TABLE AlbumArt (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT, albumArt BLOB);
+CREATE TABLE Track (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, playOrder INTEGER, length INTEGER, bpm INTEGER,
+  year INTEGER, path TEXT, filename TEXT, bitrate INTEGER, bpmAnalyzed REAL,
+  albumArtId INTEGER, fileBytes INTEGER, title TEXT, artist TEXT, album TEXT, genre TEXT,
+  comment TEXT, label TEXT, composer TEXT, remixer TEXT, key INTEGER, rating INTEGER,
+  albumArt TEXT, timeLastPlayed DATETIME, isPlayed BOOLEAN, fileType TEXT,
+  isAnalyzed BOOLEAN, dateCreated DATETIME, dateAdded DATETIME, isAvailable BOOLEAN,
+  isMetadataOfPackedTrackChanged BOOLEAN, isPerfomanceDataOfPackedTrackChanged BOOLEAN,
+  playedIndicator INTEGER, isMetadataImported BOOLEAN, pdbImportKey INTEGER,
+  streamingSource TEXT, uri TEXT, isBeatGridLocked BOOLEAN, originDatabaseUuid TEXT,
+  originTrackId INTEGER, streamingFlags INTEGER, explicitLyrics BOOLEAN,
+  lastEditTime DATETIME, albumArtSourceHash CHAR(40),
+  CONSTRAINT C_originDatabaseUuid_originTrackId UNIQUE (originDatabaseUuid, originTrackId),
+  CONSTRAINT C_path UNIQUE (path),
+  FOREIGN KEY (albumArtId) REFERENCES AlbumArt (id) ON DELETE RESTRICT
 );
+CREATE TABLE PerformanceData (
+  trackId INTEGER PRIMARY KEY, trackData BLOB,
+  FOREIGN KEY (trackId) REFERENCES Track (id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+CREATE TRIGGER trigger_after_insert_Track_check_id AFTER INSERT ON Track
+  WHEN NEW.id <= (SELECT seq FROM sqlite_sequence WHERE name = 'Track')
+BEGIN
+  SELECT RAISE(ABORT, 'Recycling deleted track id''s are not allowed');
+END;
+CREATE TRIGGER trigger_after_insert_Track_fix_origin AFTER INSERT ON Track
+  WHEN IFNULL(NEW.originTrackId, 0) = 0 OR IFNULL(NEW.originDatabaseUuid, '') = ''
+BEGIN
+  UPDATE Track SET originTrackId = NEW.id, originDatabaseUuid = (SELECT uuid FROM Information)
+  WHERE track.id = NEW.id;
+END;
+CREATE TRIGGER trigger_after_insert_Track_insert_performance_data AFTER INSERT ON Track
+BEGIN
+  INSERT INTO PerformanceData(trackId) VALUES(NEW.id);
+END;
 CREATE TABLE Playlist (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT,
@@ -126,6 +159,7 @@ _TRACK_PATHS = (
 _FULL_COUNTS = {
     "playlists_written": 2,
     "tracks_matched": 3,
+    "tracks_inserted": 0,
     "memberships_written": 3,
     "memberships_skipped": 4,
     "skipped_unresolved": 1,
@@ -169,8 +203,7 @@ def _engine_db(path: Path, *, version: tuple[int, int, int] = (3, 0, 2)) -> None
         connection.executescript(_ENGINE_SCHEMA)
         connection.execute("INSERT INTO Information VALUES ('engine-uuid', ?, ?, ?)", version)
         connection.executemany("INSERT INTO Track (path) VALUES (?)", [(p,) for p in _TRACK_PATHS])
-        connection.execute("INSERT INTO PerformanceData VALUES (NULL, 'analysis-a')")
-        connection.execute("INSERT INTO PerformanceData VALUES (NULL, 'analysis-b')")
+        connection.execute("UPDATE PerformanceData SET trackData = 'analysis-' || trackId")
         connection.execute("INSERT INTO Playlist VALUES (NULL, 'Unrelated', 0, 1, 0, '', 1)")
         unrelated = _scalar(connection, "SELECT id FROM Playlist WHERE title = 'Unrelated'")
         connection.execute(
@@ -471,17 +504,17 @@ def test_preserves_tracks_performance_data_and_unrelated_playlists(tmp_path: Pat
     engine = tmp_path / ENGINE_DB
     _engine_db(engine)
     with _open(engine) as connection:
-        tracks_before = _rows(connection, "SELECT id, path FROM Track ORDER BY id")
+        tracks_before = _rows(connection, "SELECT * FROM Track ORDER BY id")
         performance_before = _rows(
-            connection, "SELECT id, durationMeasurements FROM PerformanceData ORDER BY id"
+            connection, "SELECT trackId, trackData FROM PerformanceData ORDER BY trackId"
         )
 
     EngineExporter(database_path=engine).write(_playlists())
 
     with _open(engine) as connection:
-        assert _rows(connection, "SELECT id, path FROM Track ORDER BY id") == tracks_before
+        assert _rows(connection, "SELECT * FROM Track ORDER BY id") == tracks_before
         assert (
-            _rows(connection, "SELECT id, durationMeasurements FROM PerformanceData ORDER BY id")
+            _rows(connection, "SELECT trackId, trackData FROM PerformanceData ORDER BY trackId")
             == performance_before
         )
         unrelated = _scalar(connection, "SELECT id FROM Playlist WHERE title = 'Unrelated'")
@@ -1202,6 +1235,133 @@ def test_engine_export_cli_routes_check_base_path_into_warnings(tmp_path: Path) 
     assert result.exit_code == 0
     assert "WARNING code=file_missing" in result.stderr
     assert "SUMMARY playlists_written=2 tracks_matched=3" in result.stdout
+
+
+# ── unknown-track insertion ─────────────────────────────────────────────
+
+
+def _mp3(path: Path, picture: bytes | None = None) -> None:
+    """Write a minimal MPEG stream mutagen recognizes, optionally with embedded art."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes((b"\xff\xfb\x90\x64" + b"\x00" * 413) * 8)
+    if picture is not None:
+        tags = ID3()
+        tags.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="", data=picture))
+        tags.save(path)
+
+
+def _inserted(connection: sqlite3.Connection) -> list[dict[str, Any]]:
+    return _rows(
+        connection,
+        "SELECT t.id, t.path, t.filename, t.fileType, t.fileBytes, t.isAnalyzed, "
+        "t.originTrackId, t.originDatabaseUuid, a.hash, a.albumArt, "
+        "(SELECT COUNT(*) FROM PerformanceData p WHERE p.trackId = t.id) AS performance "
+        "FROM Track t LEFT JOIN AlbumArt a ON a.id = t.albumArtId WHERE t.id > ? ORDER BY t.id",
+        len(_TRACK_PATHS),
+    )
+
+
+def test_inserts_unknown_track_visible_under_check_base_path(tmp_path: Path) -> None:
+    engine = tmp_path / ENGINE_DB
+    _engine_db(engine)
+    mount = tmp_path / "mount"
+    _mp3(mount / "Music/New Song.MP3")
+    new = _track("Music/New Song.MP3")
+    playlists = (
+        Playlist("New", (), (_track("Music/One.mp3"), new)),
+        Playlist("Again", (), (new,)),
+    )
+
+    result = EngineExporter(database_path=engine, check_base_path=mount).write(playlists)
+
+    assert result.counts["tracks_matched"] == 1
+    assert result.counts["tracks_inserted"] == 1
+    assert result.counts["memberships_written"] == 3
+    assert result.counts["memberships_skipped"] == 0
+    connection = _open(engine)
+    [row] = _inserted(connection)
+    assert row == {
+        "id": len(_TRACK_PATHS) + 1,
+        "path": "../Music/New Song.MP3",
+        "filename": "New Song.MP3",
+        "fileType": "mp3",
+        "fileBytes": (mount / "Music/New Song.MP3").stat().st_size,
+        "isAnalyzed": 0,
+        "originTrackId": len(_TRACK_PATHS) + 1,
+        "originDatabaseUuid": "engine-uuid",
+        "hash": None,
+        "albumArt": None,
+        "performance": 1,
+    }
+    listed = _rows(
+        connection,
+        "SELECT trackId FROM PlaylistEntity WHERE listId = ? ORDER BY id",
+        _child_id(connection, _managed_root_id(connection), "New"),
+    )
+    assert [e["trackId"] for e in listed] == [1, row["id"]]
+
+
+def test_unknown_track_absent_from_check_base_path_is_skipped(tmp_path: Path) -> None:
+    engine = tmp_path / ENGINE_DB
+    _engine_db(engine)
+
+    result = EngineExporter(database_path=engine, check_base_path=tmp_path / "mount").write(
+        (Playlist("New", (), (_track("Music/Absent.mp3"),)),)
+    )
+
+    assert result.counts["tracks_inserted"] == 0
+    assert result.counts["skipped_missing"] == 1
+    assert [(w.code, w.detail) for w in result.warnings] == [
+        ("track_missing", "../Music/Absent.mp3")
+    ]
+    assert _inserted(_open(engine)) == []
+
+
+def test_inserted_tracks_link_album_art_by_embedded_picture_hash(tmp_path: Path) -> None:
+    engine = tmp_path / ENGINE_DB
+    _engine_db(engine)
+    known, fresh = b"known-cover", b"fresh-cover"
+    with _open(engine) as connection:
+        connection.execute(
+            "INSERT INTO AlbumArt (hash) VALUES (?)", (hashlib.sha1(known).digest(),)
+        )
+    mount = tmp_path / "mount"
+    _mp3(mount / "A/1.mp3", known)
+    _mp3(mount / "B/1.mp3", fresh)
+    _mp3(mount / "B/2.mp3", fresh)
+    _mp3(mount / "C/1.mp3")
+    tracks = tuple(_track(p) for p in ("A/1.mp3", "B/1.mp3", "B/2.mp3", "C/1.mp3"))
+
+    EngineExporter(database_path=engine, check_base_path=mount).write(
+        (Playlist("Art", (), tracks),)
+    )
+
+    connection = _open(engine)
+    assert [(r["path"], r["hash"], r["albumArt"]) for r in _inserted(connection)] == [
+        ("../A/1.mp3", hashlib.sha1(known).digest(), None),
+        ("../B/1.mp3", hashlib.sha1(fresh).digest(), None),
+        ("../B/2.mp3", hashlib.sha1(fresh).digest(), None),
+        ("../C/1.mp3", None, None),
+    ]
+    assert _scalar(connection, "SELECT COUNT(*) FROM AlbumArt") == 2
+
+
+def test_rerun_matches_previously_inserted_tracks(tmp_path: Path) -> None:
+    engine = tmp_path / ENGINE_DB
+    _engine_db(engine)
+    mount = tmp_path / "mount"
+    _mp3(mount / "Music/New.mp3", b"cover")
+    exporter = EngineExporter(database_path=engine, check_base_path=mount)
+    playlists = (Playlist("New", (), (_track("Music/New.mp3"),)),)
+
+    exporter.write(playlists)
+    second = exporter.write(playlists)
+
+    assert second.counts["tracks_inserted"] == 0
+    assert second.counts["tracks_matched"] == 1
+    connection = _open(engine)
+    assert len(_inserted(connection)) == 1
+    assert _scalar(connection, "SELECT COUNT(*) FROM AlbumArt") == 1
 
 
 def _write_toml(tmp_path: Path, engine_text: str | None = None) -> Path:

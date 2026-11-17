@@ -55,8 +55,8 @@ class ItunesConfig:
 class EngineConfig:
     # Required only for the Engine export command, validated per command.
     # database_path must point at an existing Engine DJ media-drive m.db;
-    # check_base_path is the optional worker-side mount used only for
-    # missing-file warnings.
+    # check_base_path is the optional worker-side library mount used for
+    # missing-file warnings and for inserting tracks Engine does not know yet.
     database_path: Path | None = None
     track_path_prefix: str = DEFAULT_ENGINE_TRACK_PATH_PREFIX
     managed_root: str = DEFAULT_ENGINE_MANAGED_ROOT

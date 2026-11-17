@@ -21,7 +21,7 @@ Current limitations:
 
 - smartlists are skipped with warnings during NML import
 - Engine export is M-only: it writes one media-drive `m.db` and mirrors no L: main-library database
-- Engine export only references tracks Engine already discovered; it never inserts tracks or changes analysis
+- Engine export inserts tracks Engine has not discovered yet only when `[engine].check_base_path` can see the file; it writes no analysis (Engine analyzes inserted tracks on its next start) and links only embedded album art
 - sanitized-name mismatch is a documented limitation (original names are not restored on import)
 - reporting is structured stdout/stderr only for now
 - no incremental sync; every import replaces the whole snapshot
@@ -67,6 +67,7 @@ check_base_path = "/path/to/music"                  # optional worker mount, use
 [engine]
 database_path = "/path/to/Engine Library/Database2/m.db"  # existing Engine DJ 5.0 media database; required for `export --format engine`
 track_path_prefix = ".."                            # optional, this is the default; prepended to store-relative paths when matching tracks
+check_base_path = "/path/to/music"                  # optional worker mount: file-missing warnings, and the source for inserting unknown tracks
 managed_root = "Playlist Sync"                      # optional, this is the default; the only playlist subtree export owns
 ```
 

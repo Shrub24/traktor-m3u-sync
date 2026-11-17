@@ -46,6 +46,7 @@
             build-system = [ python.pkgs.hatchling ];
             dependencies = [
               traktor-nml-utils
+              python.pkgs.mutagen
               python.pkgs.typer
             ];
             doCheck = false;

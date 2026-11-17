@@ -47,7 +47,7 @@ Job names must match `^[A-Za-z0-9][A-Za-z0-9_-]*$`; names are never silently rew
 | `jobs.<name>.engine.database_path` | null/string | `null` | Required existing Engine `m.db` path |
 | `jobs.<name>.engine.track_path_prefix` | string | `".."` | Prefix used to match Engine tracks |
 | `jobs.<name>.engine.managed_root` | string | `"Playlist Sync"` | Managed Engine playlist subtree |
-| `jobs.<name>.engine.check_base_path` | null/string | `null` | Optional worker-side missing-file check root |
+| `jobs.<name>.engine.check_base_path` | null/string | `null` | Optional worker-side library root for missing-file checks and unknown-track insertion |
 
 Generated jobs receive one TOML file containing `[store]` from their referenced state and only their selected format section. With `configFile`, the external file owns both store and format configuration; selected-format generated settings must not also be set, and the module cannot verify that the external store agrees with the declared state.
 
@@ -126,7 +126,7 @@ journalctl -u traktor-m3u-sync-export@engine.service
 
 Every command records its store origin (`source_format`, `imported_at`) in export summaries, and `--report-file` (or per-job `reportFile`) persists a JSON run report with counts, warnings, provenance, and exit status — including a report on hard failures and a `dry_run` marker on rehearsals. An import whose non-empty source yields zero playlists warns `empty_import_source`, so strict-mode automation trips on silent-empty scans.
 
-Engine DJ must remain closed for an Engine export. The module does not create, chown, mount, schedule, or grant access to its database. The shared service identity needs access to every state and adapter path; Engine publication additionally needs create-and-rename access in the database directory.
+Engine DJ must remain closed for an Engine export. The module does not create, chown, mount, schedule, or grant access to its database. The shared service identity needs access to every state and adapter path; Engine publication additionally needs create-and-rename access in the database directory, and read access to `check_base_path` when unknown tracks are inserted.
 
 ## Downstream orchestration examples
 
