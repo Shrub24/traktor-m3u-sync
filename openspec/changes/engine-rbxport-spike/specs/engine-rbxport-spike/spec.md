@@ -1,0 +1,12 @@
+## ADDED Requirements
+
+### Requirement: Build a trial Pioneer USB tree from Engine analysis
+The spike SHALL use an Engine 3.0.2 snapshot as a read-only source of timing and key. It SHALL derive waveforms from the source audio and SHALL NOT independently detect tempo or key. It SHALL write to a new output directory.
+
+#### Scenario: Selected analyzed tracks
+- **WHEN** the operator supplies analyzed Engine track IDs in playlist order and the source audio is available
+- **THEN** the spike writes a Pioneer USB tree with those tracks in the specified order and with the supplied grid, key and supported cue/loop positions
+
+#### Scenario: Existing destination
+- **WHEN** the output directory already exists
+- **THEN** the spike refuses to export rather than overwriting it
