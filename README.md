@@ -287,7 +287,9 @@ managed track ID to whether its analysis (`isAnalyzed` and a saved beat grid) is
 the database read-only, so it is safe while Engine runs, and exits 75 if the database stays
 locked. The flake's `engine-analysis-guest` package is the Windows-side half of an unattended
 run: `engine-analysis.ps1 -Install -ControlDir <dir>` registers a logon task that, on a
-`request` file in that directory, starts Engine and later closes it normally. Booting the
+`request` file in that directory, starts Engine and later closes it normally, answering the
+quit confirmation and two known notices through UI Automation and failing with the text of any
+other dialog. Booting the
 guest, dismissing prompts, and triggering are the deployment's job.
 
 Run order: close Engine DJ (or stop the VM) → `export --format engine --dry-run` → real export →
