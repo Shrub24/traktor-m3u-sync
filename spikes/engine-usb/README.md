@@ -12,14 +12,14 @@ The staged tree preserves native playlist ordering, source track origins and ana
 
 ## Manual delivery through Android
 
-Use a spare stick with no existing Engine database for the first install. Create a random UUID with `uuidgen` and put it on one line in `.playlist-sync-stick` at the USB root. In Primitive FTPd, grant access to the USB root, start **SFTP** on the private network, and authorize a dedicated home-forge public key. Verify the phone's SSH host key out of band and add it to a dedicated known-hosts file (`[host]:port` for a nonstandard port). Keep Engine and any other stick writer closed during delivery.
+Use a spare stick with no existing Engine database for the first install. Create a random UUID with `uuidgen` and put it on one line in `.playlist-sync-stick` at the USB root. In sshd4a, authorize a dedicated home-forge public key and start the SSH server on the private network. Use the OpenSSH backend for this trial and configure the SFTP session to start at the USB root: the delivery command resolves the marker and all export paths relative to that directory. Verify the phone's SSH host key out of band and add it to a dedicated known-hosts file (`[host]:port` for a nonstandard port). Keep Engine and any other stick writer closed during delivery.
 
 From home-forge, run from the repo root:
 
 ```sh
 nix shell --impure --expr 'let p = (builtins.getFlake "nixpkgs").legacyPackages.${builtins.currentSystem}; in p.python3.withPackages (ps: [ ps.paramiko ])' -c \
   python3 spikes/engine-usb/push.py /path/to/staged-tree PHONE_HOST STICK_UUID \
-  --port 2222 --user SFTP_USER --key ~/.ssh/dj-usb \
+  --port SSH_PORT --user SSH_USER --key ~/.ssh/dj-usb \
   --known-hosts ~/.ssh/dj-usb-known-hosts --state ~/.local/state/dj-usb
 ```
 
@@ -27,9 +27,9 @@ This previews the changes. Add `--apply` to write to the stick. Keep the staged 
 
 The host hashes the staged tree locally. It reads the stick marker and database, not the whole media tree. File mtimes do not matter. Unchanged media is trusted from the last recognized install; this is not a full scan for externally removed or corrupted files. On retry, a new asset already at its final path is read back to confirm it matches. Newly uploaded media is checked for length; the uploaded database is hashed back before publication. A fresh Engine device UUID creates fresh RGB paths, so new builds can transfer the overview files even when audio is unchanged.
 
-Refresh requires SFTP `posix-rename` with overwrite support. The command tests it on disposable files in the database directory first and has no delete-and-rename fallback. This works against OpenSSH; it is not yet verified on Primitive FTPd. A database with player edits is backed up and refused, as is a changed asset at a path still referenced by the old export. No media is deleted. The delivery code is separate from Engine export; the manual entry point only supports Engine today. A Pioneer adapter must define how to publish its multiple library files safely.
+Refresh requires SFTP `posix-rename` with overwrite support. The command tests it on disposable files in the database directory first and has no delete-and-rename fallback. This passed against standalone OpenSSH; verify it on sshd4a with the actual USB attached. A database with player edits is backed up and refused, as is a changed asset at a path still referenced by the old export. No media is deleted. The delivery code is separate from Engine export; the manual entry point only supports Engine today. A Pioneer adapter must define how to publish its multiple library files safely. sshd4a's rsync can be evaluated later for asset transfers; it does not replace manifest comparison, database backup, or database-last publication.
 
-On a spare stick, apply an initial export, preview it again (expect zero transfers), then apply an export with one more track. Test a dropped connection before publication and retry. Wait for delivery to complete, stop Primitive FTPd, and eject the USB in Android before unplugging. A stopped SFTP server is not an eject.
+On a spare stick, apply an initial export, preview it again (expect zero transfers), then apply an export with one more track. Test a dropped connection before publication and retry. Wait for delivery to complete, stop sshd4a, and eject the USB in Android before unplugging. A stopped SFTP server is not an eject.
 
 ## SC6000 acceptance
 
