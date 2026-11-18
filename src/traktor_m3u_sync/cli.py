@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
@@ -16,6 +18,7 @@ from .config import (
     load_config,
 )
 from .contracts import AdapterWarning, SyncResult
+from .formats.engine.analysis import managed_analysis_saved
 from .reporting import utc_now, write_run_report
 from .services import run_export, run_import
 
@@ -145,6 +148,44 @@ def export(
         fail_on_warning=fail_on_warning,
         dry_run=dry_run,
     )
+
+
+@app.command(name="engine-analysis")
+def engine_analysis(
+    config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
+    engine_database: Path | None = typer.Option(
+        None, "--engine-database", help="Engine DJ media database (m.db) to read"
+    ),
+    engine_managed_root: str | None = typer.Option(
+        None, "--engine-managed-root", help="Owned Engine top-level playlist"
+    ),
+) -> None:
+    """Print JSON mapping each managed Engine track ID to whether its analysis is saved.
+
+    Read-only and safe while Engine DJ is open; exits 75 if the database stays locked.
+    """
+    try:
+        engine = apply_export_overrides(
+            load_config(config),
+            format="engine",
+            engine_database=engine_database,
+            engine_managed_root=engine_managed_root,
+        ).engine
+        assert engine.database_path is not None
+        saved = managed_analysis_saved(engine.database_path, engine.managed_root)
+    except sqlite3.OperationalError as exc:
+        if exc.sqlite_errorcode != sqlite3.SQLITE_BUSY:
+            typer.echo(f"ERROR code=engine_analysis_failed detail={exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        typer.echo("ERROR code=engine_busy detail=database is locked", err=True)
+        raise typer.Exit(code=75) from exc
+    except ConfigError as exc:
+        typer.echo(f"ERROR code=config_error detail={exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except Exception as exc:
+        typer.echo(f"ERROR code=engine_analysis_failed detail={exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps({str(track_id): done for track_id, done in saved.items()}))
 
 
 def _run(

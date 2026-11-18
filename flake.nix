@@ -324,6 +324,9 @@
           packages = {
             default = traktor-m3u-sync;
             traktor-m3u-sync = traktor-m3u-sync;
+            engine-analysis-guest = pkgs.runCommand "engine-analysis-guest" { } ''
+              install -D ${./windows/engine-analysis.ps1} $out/engine-analysis.ps1
+            '';
             traktor-nml-utils = traktor-nml-utils;
           };
 

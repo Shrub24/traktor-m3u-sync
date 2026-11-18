@@ -58,6 +58,7 @@ Sub-areas:
 
 **Active OpenSpec change (apply in progress):**
 - `sync-reporting` — JSON run reports (including on failure), store provenance, empty-import warning, `onFailure` fan-out, Engine `check_base_path`
+- `engine-analysis-lifecycle` — `engine-analysis` status command and `engine-analysis-guest` Windows task for unattended Engine analysis; awaiting a live headless check
 - `engine-track-insertion` — insert unknown tracks into Engine with tags, embedded art and artwork thumbnails; awaiting a live end-to-end check
 - `rekordbox-xml-export` — store-to-rekordbox XML exporter sharing iTunes' collection step and config shape; rekordbox USB export stays downstream
 

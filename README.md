@@ -96,6 +96,9 @@ traktor-m3u-sync export --format nml --config traktor-m3u-sync.toml
 traktor-m3u-sync export --format itunes --config traktor-m3u-sync.toml
 traktor-m3u-sync export --format rekordbox --config traktor-m3u-sync.toml
 traktor-m3u-sync export --format engine --config traktor-m3u-sync.toml
+
+# which managed Engine tracks have saved analysis (read-only; safe while Engine is open)
+traktor-m3u-sync engine-analysis --config traktor-m3u-sync.toml
 ```
 
 Per-command overrides:
@@ -278,6 +281,14 @@ Engine DJ 5.0 keeps playlists in SQLite, so this export mutates a database inste
   adjacent `<database-name>.playlist-sync.bak` (one generation, retained on success), the stage
   replaces the target atomically, and a post-publication validation failure restores that backup.
   The published inode is owned by the worker identity and gets its group from the target directory
+
+Inserted tracks stay unanalyzed until Engine opens. `engine-analysis` prints JSON mapping each
+managed track ID to whether its analysis (`isAnalyzed` and a saved beat grid) is saved; it opens
+the database read-only, so it is safe while Engine runs, and exits 75 if the database stays
+locked. The flake's `engine-analysis-guest` package is the Windows-side half of an unattended
+run: `engine-analysis.ps1 -Install -ControlDir <dir>` registers a logon task that, on a
+`request` file in that directory, starts Engine and later closes it normally. Booting the
+guest, dismissing prompts, and triggering are the deployment's job.
 
 Run order: close Engine DJ (or stop the VM) → `export --format engine --dry-run` → real export →
 check matched tracks, playlists, memberships, and skips in the summary → open Engine DJ. Rollback is
