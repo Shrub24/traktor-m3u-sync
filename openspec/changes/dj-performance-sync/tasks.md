@@ -16,8 +16,9 @@
 
 ## 3. Pioneer export
 
-- [ ] 3.1 Playlists in the snapshot
-- [ ] 3.2 rbxport helper package consuming the snapshot
+- [x] 3.1 Playlists and Pioneer track metadata in the snapshot
+- [x] 3.2 rbxport helper package consuming the snapshot
+- [ ] 3.2a `usb build` for `[usb.pioneer]` running the helper into a persistent directory
 - [ ] 3.3 Publication rule for Pioneer's library files
 - [ ] 3.4 Export opens in rekordbox desktop with Engine's grid and cues
 

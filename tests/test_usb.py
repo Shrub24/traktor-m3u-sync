@@ -90,10 +90,15 @@ class Library:
     def add(self, playlist: int, *tracks: int) -> None:
         with self.connect() as db:
             for track in tracks:
-                db.execute(
+                entity = db.execute(
                     "INSERT INTO PlaylistEntity (listId, trackId, databaseUuid, nextEntityId,"
                     " membershipReference) VALUES (?, ?, ?, 0, 0)",
                     (playlist, track, str(SOURCE)),
+                ).lastrowid
+                db.execute(
+                    "UPDATE PlaylistEntity SET nextEntityId = ?"
+                    " WHERE listId = ? AND nextEntityId = 0 AND id <> ?",
+                    (entity, playlist, entity),
                 )
 
 

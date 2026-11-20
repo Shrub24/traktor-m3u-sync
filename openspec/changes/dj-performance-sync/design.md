@@ -13,7 +13,7 @@ Frozen dataclasses serialized as JSON with a version number, validated where JSO
 
 - `TrackRef`: Engine origin database UUID and origin track ID — preserved across Engine USB exports.
 - `Performance`: key (pitch class and mode), beat grid markers (position, beat index; constant tempo between markers), main cue, hot cues by slot, saved loops by slot.
-- `Snapshot`: the captured library's UUID, the SHA-256 of the captured `m.db`, and each track's reference, Engine path and performance. Playlists join the snapshot with the Pioneer export, its first consumer.
+- `Snapshot`: the captured library's UUID, the SHA-256 of the captured `m.db`, and each track's reference, Engine path and performance. It also carries the playlist tree in Engine's order and the track metadata an exporter lists (tags, duration, bitrate, sample rate, file size, artwork thumbnail).
 
 Each adapter declares the fields it can represent and its time resolution. A diff compares only fields that both sides represent, at the coarser resolution, so an unsupported field is never read as a deletion and rounding is never read as an edit.
 
@@ -31,4 +31,5 @@ Capture rejects a database with active SQLite sidecars, reads the file once, and
 2. Pioneer downbeats assume a beat index divisible by 4 starts a bar, until rekordbox desktop confirms it.
 3. Exporters carry Engine's saved grid unchanged, even where it disagrees with `bpmAnalyzed`. Pioneer BPM derives from the grid.
 4. Read-back compares the stick with current Engine, not with what was delivered, and approved differences take the stick's value. Engine runs headless, so between a delivery and its read-back only the player changes performance data. Revisit with a second writer of performance data (another stick of the same tracks, or enrichment into Engine), where a delivered baseline would be needed to tell which side changed.
-5. Rust is limited to the rbxport helper, a separate flake package pinned to an upstream revision. The snapshot JSON is its input.
+5. Rust is limited to the rbxport helper, a separate flake package pinned to an upstream revision. The snapshot JSON is its input, and `tests/fixtures/snapshot.json` is parsed by both test suites.
+6. The Pioneer export truncates comments to 1,000 characters: `export.pdb` holds about 4 KB of strings per track, and Bandcamp release notes in comments exceed it. The audio's own tags are untouched.

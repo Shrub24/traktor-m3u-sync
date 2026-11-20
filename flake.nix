@@ -38,6 +38,7 @@
           treefmtEval = treefmt-nix.lib.evalModule pkgs ./treefmt.nix;
           python = pkgs.python314;
           traktor-nml-utils = python.pkgs.callPackage ./nix/packages/traktor-nml-utils.nix { };
+          pioneer-usb = pkgs.callPackage ./nix/packages/pioneer-usb.nix { };
           traktor-m3u-sync = python.pkgs.buildPythonApplication {
             pname = "traktor-m3u-sync";
             version = "0.1.0";
@@ -64,6 +65,7 @@
           formatter = treefmtEval.config.build.wrapper;
 
           checks = {
+            inherit pioneer-usb;
             formatting = treefmtEval.config.build.check self;
 
             module-eval =
@@ -378,6 +380,7 @@
               install -D ${./windows/engine-analysis.ps1} $out/engine-analysis.ps1
             '';
             traktor-nml-utils = traktor-nml-utils;
+            inherit pioneer-usb;
           };
 
           apps.default = {

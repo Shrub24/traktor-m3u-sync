@@ -1,4 +1,4 @@
-"""Format-neutral DJ performance data and its versioned JSON form.
+"""Format-neutral DJ library snapshot: performance data, track metadata and playlists.
 
 Times are seconds from the start of the audio. Cue and loop slots are numbered from 1.
 """
@@ -7,11 +7,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any, Literal, cast
 from uuid import UUID
 
-SNAPSHOT_VERSION = 1
+SNAPSHOT_VERSION = 2
 
 
 class SnapshotError(ValueError):
@@ -72,10 +72,34 @@ class TrackRef:
 
 
 @dataclass(frozen=True)
+class TrackInfo:
+    title: str = ""
+    artist: str = ""
+    album: str = ""
+    genre: str = ""
+    label: str = ""
+    comment: str = ""
+    year: int | None = None
+    duration: int | None = None  # whole seconds
+    bitrate: int | None = None
+    sample_rate: int | None = None
+    file_size: int | None = None
+    artwork: str | None = None  # relative to the library directory
+
+
+@dataclass(frozen=True)
 class TrackPerformance:
     ref: TrackRef
-    path: str
+    path: str  # relative to the library directory
     performance: Performance
+    info: TrackInfo = TrackInfo()
+
+
+@dataclass(frozen=True)
+class PlaylistNode:
+    name: str
+    tracks: tuple[TrackRef, ...] = ()
+    children: tuple[PlaylistNode, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -83,6 +107,24 @@ class Snapshot:
     library: UUID
     sha256: str
     tracks: tuple[TrackPerformance, ...]
+    playlists: tuple[PlaylistNode, ...] = ()
+
+
+def select(snapshot: Snapshot, root: str) -> Snapshot:
+    """The top-level playlist ``root`` with its descendants, and only the tracks they hold."""
+    nodes = [node for node in snapshot.playlists if node.name == root]
+    if len(nodes) != 1:
+        raise SnapshotError(f"Expected one top-level playlist named {root!r}")
+    refs: set[TrackRef] = set()
+    pending = list(nodes)
+    while pending:
+        node = pending.pop()
+        refs.update(node.tracks)
+        pending += node.children
+    tracks = tuple(track for track in snapshot.tracks if track.ref in refs)
+    if len(tracks) != len(refs):
+        raise SnapshotError(f"Playlist {root!r} holds tracks missing from the snapshot")
+    return Snapshot(snapshot.library, snapshot.sha256, tracks, tuple(nodes))
 
 
 type Field = Literal["key", "grid", "main_cue", "hot_cues", "loops"]
@@ -131,6 +173,7 @@ def dumps(snapshot: Snapshot) -> str:
             "tracks": [
                 _track_json(track) for track in sorted(snapshot.tracks, key=lambda t: t.ref)
             ],
+            "playlists": [_playlist_json(node) for node in snapshot.playlists],
         },
         ensure_ascii=False,
     )
@@ -145,8 +188,14 @@ def loads(text: str) -> Snapshot:
             "library": str(library),
             "sha256": str(digest),
             "tracks": tracks,
+            "playlists": playlists,
         }:
-            return Snapshot(_uuid(library), digest, tuple(_track(t) for t in _items(tracks)))
+            return Snapshot(
+                _uuid(library),
+                digest,
+                tuple(_track(t) for t in _items(tracks)),
+                tuple(_playlist(p) for p in _items(playlists)),
+            )
         case _:
             raise SnapshotError("Malformed snapshot")
 
@@ -174,6 +223,15 @@ def _track_json(track: TrackPerformance) -> dict[str, Any]:
             }
             for slot, loop in sorted(performance.loops.items())
         },
+        "info": {f.name: getattr(track.info, f.name) for f in fields(TrackInfo)},
+    }
+
+
+def _playlist_json(node: PlaylistNode) -> dict[str, Any]:
+    return {
+        "name": node.name,
+        "tracks": [[str(ref.database), ref.track_id] for ref in node.tracks],
+        "children": [_playlist_json(child) for child in node.children],
     }
 
 
@@ -192,6 +250,7 @@ def _track(data: Any) -> TrackPerformance:
             "main_cue": main_cue,
             "hot_cues": hot_cues,
             "loops": loops,
+            "info": info,
         }:
             return TrackPerformance(
                 TrackRef(_uuid(database), track_id),
@@ -203,9 +262,49 @@ def _track(data: Any) -> TrackPerformance:
                     hot_cues={_slot(s): _cue(c) for s, c in _slots(hot_cues)},
                     loops={_slot(s): _loop(lp) for s, lp in _slots(loops)},
                 ),
+                _info(info),
             )
         case _:
             raise SnapshotError(f"Malformed track: {data!r}")
+
+
+_INFO_TEXT = frozenset(f.name for f in fields(TrackInfo) if f.type == "str")
+
+
+def _info(data: Any) -> TrackInfo:
+    values = cast(dict[str, Any], data) if isinstance(data, dict) else {}
+    if set(values) != {f.name for f in fields(TrackInfo)}:
+        raise SnapshotError(f"Malformed track info: {data!r}")
+    for name, value in values.items():
+        if name in _INFO_TEXT:
+            valid = isinstance(value, str)
+        elif name == "artwork":
+            valid = value is None or isinstance(value, str)
+        else:
+            valid = value is None or (isinstance(value, int) and not isinstance(value, bool))
+        if not valid:
+            raise SnapshotError(f"Malformed track info field {name}: {value!r}")
+    return TrackInfo(**values)
+
+
+def _playlist(data: Any) -> PlaylistNode:
+    match data:
+        case {"name": str(name), "tracks": tracks, "children": children}:
+            return PlaylistNode(
+                name,
+                tuple(_ref(ref) for ref in _items(tracks)),
+                tuple(_playlist(child) for child in _items(children)),
+            )
+        case _:
+            raise SnapshotError(f"Malformed playlist: {data!r}")
+
+
+def _ref(data: Any) -> TrackRef:
+    match data:
+        case [str(database), int(track_id)] if not isinstance(track_id, bool):
+            return TrackRef(_uuid(database), track_id)
+        case _:
+            raise SnapshotError(f"Malformed track reference: {data!r}")
 
 
 def _key(data: Any) -> Key | None:

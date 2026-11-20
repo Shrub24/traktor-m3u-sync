@@ -30,12 +30,18 @@ from traktor_m3u_sync.model.performance import (
     Cue,
     Key,
     Loop,
+    PlaylistNode,
+    Snapshot,
     SnapshotError,
+    TrackInfo,
+    TrackRef,
     dumps,
     loads,
+    select,
 )
 
 LIBRARY = UUID("8ae3af13-4aae-44e6-91c2-8abc483ba2c9")
+OTHER = UUID("11111111-2222-3333-4444-555555555555")
 RATE = 44100.0
 
 
@@ -113,16 +119,37 @@ def _engine_db(path: Path) -> None:
             CREATE TABLE Information (uuid TEXT, schemaVersionMajor INTEGER,
                 schemaVersionMinor INTEGER, schemaVersionPatch INTEGER);
             CREATE TABLE Track (id INTEGER PRIMARY KEY, path TEXT, key INTEGER,
-                originDatabaseUuid TEXT, originTrackId INTEGER);
+                originDatabaseUuid TEXT, originTrackId INTEGER, title TEXT, artist TEXT,
+                album TEXT, genre TEXT, label TEXT, comment TEXT, year INTEGER,
+                length INTEGER, bitrate INTEGER, fileBytes INTEGER, albumArtId INTEGER);
+            CREATE TABLE AlbumArt (id INTEGER PRIMARY KEY, hash BLOB);
             CREATE TABLE PerformanceData (trackId INTEGER PRIMARY KEY, beatData BLOB,
                 quickCues BLOB, loops BLOB);
+            CREATE TABLE Playlist (id INTEGER PRIMARY KEY, title TEXT, parentListId INTEGER,
+                nextListId INTEGER);
+            CREATE TABLE PlaylistEntity (id INTEGER PRIMARY KEY, listId INTEGER,
+                trackId INTEGER, databaseUuid TEXT, nextEntityId INTEGER);
             """
         )
         connection.execute("INSERT INTO Information VALUES (?, 3, 0, 2)", (str(LIBRARY),))
+        connection.execute("INSERT INTO AlbumArt VALUES (3, ?)", (bytes(range(20)),))
         connection.execute(
-            "INSERT INTO Track VALUES (5, '../library/a.mp3', 1, ?, 5),"
-            " (6, '../library/b.mp3', NULL, ?, 6)",
+            "INSERT INTO Track VALUES"
+            " (5, '../library/a.mp3', 1, ?, 5, 'A', 'Artist', '', NULL, '', '', 2024,"
+            " 300, 320, 1234, 3),"
+            " (6, '../library/b.mp3', NULL, ?, 6, 'B', '', '', '', '', '', NULL,"
+            " NULL, NULL, NULL, NULL)",
             (str(LIBRARY), str(LIBRARY)),
+        )
+        # Ids deliberately disagree with Engine's linked order.
+        connection.execute(
+            "INSERT INTO Playlist VALUES (10, 'Sync', 0, 0), (11, 'Other', 0, 10),"
+            " (12, 'Second', 10, 0), (13, 'First', 10, 12)"
+        )
+        connection.execute(
+            "INSERT INTO PlaylistEntity VALUES (20, 13, 5, ?, 0), (21, 13, 6, ?, 20),"
+            " (22, 12, 7, ?, 0)",
+            (str(LIBRARY), str(LIBRARY), str(OTHER)),
         )
         connection.execute(
             "INSERT INTO PerformanceData VALUES (5, ?, ?, ?), (6, NULL, NULL, NULL)",
@@ -149,6 +176,50 @@ def test_capture_maps_analyzed_and_unanalyzed_tracks(tmp_path: Path) -> None:
     assert performance.loops == {1: Loop(1.0, 2.0, "Intro", Color(1, 2, 3))}
     empty = unanalyzed.performance
     assert (empty.key, empty.grid, empty.hot_cues, empty.loops) == (None, (), {}, {})
+    assert analyzed.info == TrackInfo(
+        "A",
+        "Artist",
+        year=2024,
+        duration=300,
+        bitrate=320,
+        sample_rate=44100,
+        file_size=1234,
+        artwork="Artwork/AAECAwQFBgcICQoLDA0ODxAREhM.jpg",
+    )
+    assert unanalyzed.info == TrackInfo("B")
+
+
+def test_capture_keeps_engine_playlist_order_and_selects_a_subtree(tmp_path: Path) -> None:
+    database = tmp_path / "m.db"
+    _engine_db(database)
+    snapshot = capture(database)
+    a, b = (TrackRef(LIBRARY, 5), TrackRef(LIBRARY, 6))
+    assert snapshot.playlists == (
+        PlaylistNode("Other"),
+        PlaylistNode(
+            "Sync",
+            children=(
+                PlaylistNode("First", (b, a)),
+                PlaylistNode("Second", (TrackRef(OTHER, 7),)),
+            ),
+        ),
+    )
+    with sqlite3.connect(database) as connection:
+        connection.execute("DELETE FROM PlaylistEntity WHERE id = 22")
+    chosen = select(capture(database), "Sync")
+    assert [node.name for node in chosen.playlists] == ["Sync"]
+    assert {track.ref for track in chosen.tracks} == {a, b}
+    with pytest.raises(SnapshotError, match="missing from the snapshot"):
+        select(snapshot, "Sync")
+
+
+def test_capture_rejects_a_broken_playlist_chain(tmp_path: Path) -> None:
+    database = tmp_path / "m.db"
+    _engine_db(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE PlaylistEntity SET nextEntityId = 21 WHERE id = 20")
+    with pytest.raises(EnginePerformanceError, match="playlist order"):
+        capture(database)
 
 
 def test_capture_rejects_partial_performance_data(tmp_path: Path) -> None:
@@ -178,14 +249,34 @@ def test_snapshot_json_round_trips(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "text",
     [
-        '{"version": 2, "library": "x", "sha256": "", "tracks": []}',
-        '{"version": 1, "library": "8ae3af13-4aae-44e6-91c2-8abc483ba2c9", "sha256": "",'
-        ' "tracks": [{"database": "8ae3af13-4aae-44e6-91c2-8abc483ba2c9", "track_id": 1,'
-        ' "path": "a", "key": null, "grid": [], "main_cue": null,'
-        ' "hot_cues": {"0": {"position": 1.0, "label": "", "color": [0, 0, 0]}}, "loops": {}}]}',
+        '{"version": 1, "library": "x", "sha256": "", "tracks": []}',
+        '{"version": 2, "library": "8ae3af13-4aae-44e6-91c2-8abc483ba2c9", "sha256": "",'
+        ' "playlists": [], "tracks": [{"database": "8ae3af13-4aae-44e6-91c2-8abc483ba2c9",'
+        ' "track_id": 1, "path": "a", "key": null, "grid": [], "main_cue": null,'
+        ' "hot_cues": {"0": {"position": 1.0, "label": "", "color": [0, 0, 0]}}, "loops": {},'
+        ' "info": {"title": "", "artist": "", "album": "", "genre": "", "label": "",'
+        ' "comment": "", "year": null, "duration": null, "bitrate": null,'
+        ' "sample_rate": null, "file_size": null, "artwork": null}}]}',
     ],
     ids=["unknown version", "slot zero"],
 )
 def test_snapshot_json_rejects_unknown_or_malformed_content(text: str) -> None:
     with pytest.raises(SnapshotError):
         loads(text)
+
+
+SHARED_SNAPSHOT = Path(__file__).parent / "fixtures" / "snapshot.json"
+
+
+def _shared_source(tmp_path: Path) -> Snapshot:
+    database = tmp_path / "m.db"
+    _engine_db(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute("DELETE FROM PlaylistEntity WHERE id = 22")
+    return select(capture(database), "Sync")
+
+
+def test_shared_snapshot_fixture_is_current(tmp_path: Path) -> None:
+    """pioneer-usb's tests parse this file, so it must stay what capture produces."""
+    shared = loads(SHARED_SNAPSHOT.read_text())
+    assert shared == replace(_shared_source(tmp_path), sha256=shared.sha256)

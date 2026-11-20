@@ -11,7 +11,8 @@ import hashlib
 import sqlite3
 import struct
 import zlib
-from collections.abc import Sequence
+from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -25,10 +26,13 @@ from ...model.performance import (
     Key,
     Loop,
     Performance,
+    PlaylistNode,
     Snapshot,
+    TrackInfo,
     TrackPerformance,
     TrackRef,
 )
+from .media import thumbnail_name
 from .writer import SCHEMA_VERSION, EngineWriteError, preflight_target
 
 type Argb = tuple[int, int, int, int]
@@ -267,15 +271,18 @@ def performance(
 
 
 _TRACKS = """
-SELECT t.originDatabaseUuid, t.originTrackId, t.path, t.key,
-       p.beatData, p.quickCues, p.loops
+SELECT t.id, t.originDatabaseUuid, t.originTrackId, t.path, t.key,
+       p.beatData, p.quickCues, p.loops,
+       t.title, t.artist, t.album, t.genre, t.label, t.comment,
+       t.year, t.length, t.bitrate, t.fileBytes, a.hash
 FROM Track t JOIN PerformanceData p ON p.trackId = t.id
+LEFT JOIN AlbumArt a ON a.id = t.albumArtId
 ORDER BY t.id
 """
 
 
 def capture(database_path: Path) -> Snapshot:
-    """Snapshot the performance data of a closed Engine database without modifying it."""
+    """Snapshot a closed Engine database without modifying it."""
     preflight_target(database_path)
     data = database_path.read_bytes()
     with closing(sqlite3.connect(":memory:")) as connection:
@@ -287,10 +294,12 @@ def capture(database_path: Path) -> Snapshot:
         library, *version = row
         if tuple(version) != SCHEMA_VERSION:
             raise EngineWriteError(f"Engine schema {tuple(version)!r} is unsupported")
-        tracks = tuple(_track(*track) for track in connection.execute(_TRACKS))
+        rows = {row[0]: _track(*row[1:]) for row in connection.execute(_TRACKS)}
+        playlists = _playlists(connection, library, {i: t.ref for i, t in rows.items()})
+    tracks = tuple(rows.values())
     if len({track.ref for track in tracks}) != len(tracks):
         raise EnginePerformanceError("Engine database has duplicate track origins")
-    return Snapshot(UUID(library), hashlib.sha256(data).hexdigest(), tracks)
+    return Snapshot(UUID(library), hashlib.sha256(data).hexdigest(), tracks, playlists)
 
 
 def _track(
@@ -301,18 +310,87 @@ def _track(
     beat_data: bytes | None,
     quick_cues: bytes | None,
     loops: bytes | None,
+    title: str | None,
+    artist: str | None,
+    album: str | None,
+    genre: str | None,
+    label: str | None,
+    comment: str | None,
+    year: int | None,
+    length: int | None,
+    bitrate: int | None,
+    size: int | None,
+    art: bytes | None,
 ) -> TrackPerformance:
     if database is None or track_id is None:
         raise EnginePerformanceError(f"Engine track {path!r} has no origin")
-    if beat_data is None and quick_cues is None and loops is None:
+    beat = None if beat_data is None else decode_beat_data(beat_data)
+    if beat is None and quick_cues is None and loops is None:
         result = Performance(key=None if key is None else engine_key(key))
-    elif beat_data is not None and quick_cues is not None and loops is not None:
-        result = performance(
-            key, decode_beat_data(beat_data), decode_quick_cues(quick_cues), decode_loops(loops)
-        )
+    elif beat is not None and quick_cues is not None and loops is not None:
+        result = performance(key, beat, decode_quick_cues(quick_cues), decode_loops(loops))
     else:
         raise EnginePerformanceError(f"Engine track {path!r} has partial performance data")
-    return TrackPerformance(TrackRef(UUID(database), track_id), path, result)
+    info = TrackInfo(
+        title=title or "",
+        artist=artist or "",
+        album=album or "",
+        genre=genre or "",
+        label=label or "",
+        comment=comment or "",
+        year=year,
+        duration=length,
+        bitrate=bitrate,
+        sample_rate=None if beat is None else int(beat.sample_rate),
+        file_size=size,
+        artwork=None if art is None else f"Artwork/{thumbnail_name(art)}",
+    )
+    return TrackPerformance(TrackRef(UUID(database), track_id), path, result, info)
+
+
+def _playlists(
+    connection: sqlite3.Connection, library: str, local: Mapping[int, TrackRef]
+) -> tuple[PlaylistNode, ...]:
+    """The playlist tree in Engine's order. Entries of this library resolve to their origin;
+    entries of another library (as on a stick) already name it."""
+    children: dict[int, dict[int, int]] = defaultdict(dict)
+    titles: dict[int, str] = {}
+    for list_id, title, parent, following in connection.execute(
+        "SELECT id, title, parentListId, nextListId FROM Playlist"
+    ):
+        children[parent][list_id] = following
+        titles[list_id] = title
+    entries: dict[int, dict[int, int]] = defaultdict(dict)
+    refs: dict[int, TrackRef] = {}
+    for entity, list_id, track_id, database, following in connection.execute(
+        "SELECT id, listId, trackId, databaseUuid, nextEntityId FROM PlaylistEntity"
+    ):
+        entries[list_id][entity] = following
+        refs[entity] = (
+            local[track_id] if database == library else TrackRef(UUID(database), track_id)
+        )
+
+    def node(list_id: int) -> PlaylistNode:
+        return PlaylistNode(
+            titles[list_id],
+            tuple(refs[entity] for entity in _ordered(entries[list_id])),
+            tuple(node(child) for child in _ordered(children[list_id])),
+        )
+
+    return tuple(node(top) for top in _ordered(children[0]))
+
+
+def _ordered(following: Mapping[int, int]) -> list[int]:
+    """Walk an Engine sibling chain: each id names the next, and the last names 0."""
+    heads = following.keys() - set(following.values())
+    order: list[int] = []
+    node = next(iter(heads)) if len(heads) == 1 else 0
+    while node in following and len(order) <= len(following):
+        order.append(node)
+        node = following[node]
+    if len(order) != len(following) or node != 0:
+        raise EnginePerformanceError("Engine playlist order is broken")
+    return order
 
 
 _PERFORMANCE = """

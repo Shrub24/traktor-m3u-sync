@@ -1,0 +1,115 @@
+{
+  "version": 2,
+  "library": "8ae3af13-4aae-44e6-91c2-8abc483ba2c9",
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "tracks": [
+    {
+      "database": "8ae3af13-4aae-44e6-91c2-8abc483ba2c9",
+      "track_id": 5,
+      "path": "../library/a.mp3",
+      "key": {
+        "tonic": 9,
+        "minor": true
+      },
+      "grid": [
+        [
+          -1.5489721276890784,
+          -4
+        ],
+        [
+          305.4855106309316,
+          738
+        ]
+      ],
+      "main_cue": 0.5,
+      "hot_cues": {
+        "2": {
+          "position": 2.0,
+          "label": "Drop",
+          "color": [
+            200,
+            30,
+            10
+          ]
+        }
+      },
+      "loops": {
+        "1": {
+          "start": 1.0,
+          "end": 2.0,
+          "label": "Intro",
+          "color": [
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "info": {
+        "title": "A",
+        "artist": "Artist",
+        "album": "",
+        "genre": "",
+        "label": "",
+        "comment": "",
+        "year": 2024,
+        "duration": 300,
+        "bitrate": 320,
+        "sample_rate": 44100,
+        "file_size": 1234,
+        "artwork": "Artwork/AAECAwQFBgcICQoLDA0ODxAREhM.jpg"
+      }
+    },
+    {
+      "database": "8ae3af13-4aae-44e6-91c2-8abc483ba2c9",
+      "track_id": 6,
+      "path": "../library/b.mp3",
+      "key": null,
+      "grid": [],
+      "main_cue": null,
+      "hot_cues": {},
+      "loops": {},
+      "info": {
+        "title": "B",
+        "artist": "",
+        "album": "",
+        "genre": "",
+        "label": "",
+        "comment": "",
+        "year": null,
+        "duration": null,
+        "bitrate": null,
+        "sample_rate": null,
+        "file_size": null,
+        "artwork": null
+      }
+    }
+  ],
+  "playlists": [
+    {
+      "name": "Sync",
+      "tracks": [],
+      "children": [
+        {
+          "name": "First",
+          "tracks": [
+            [
+              "8ae3af13-4aae-44e6-91c2-8abc483ba2c9",
+              6
+            ],
+            [
+              "8ae3af13-4aae-44e6-91c2-8abc483ba2c9",
+              5
+            ]
+          ],
+          "children": []
+        },
+        {
+          "name": "Second",
+          "tracks": [],
+          "children": []
+        }
+      ]
+    }
+  ]
+}
