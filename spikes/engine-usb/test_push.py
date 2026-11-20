@@ -25,12 +25,12 @@ class Client(SFTPClient):
     def posix_rename(self, oldpath: str, newpath: str) -> None:
         if self.reject_replace:
             raise OSError("unsupported replacement")
+        if newpath == self.blocked:
+            raise OSError("interrupted before asset publication")
         super().posix_rename(oldpath, newpath)
 
     def rename(self, oldpath: str, newpath: str) -> None:
-        if newpath == self.blocked:
-            raise OSError("interrupted before asset publication")
-        super().rename(oldpath, newpath)
+        raise PermissionError("standard rename unavailable on this volume")
 
 
 def exercise(sftp: Client, root: Path, stick: Path) -> None:

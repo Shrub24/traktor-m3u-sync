@@ -210,9 +210,9 @@ def push(
     if not apply or not changes:
         return
 
-    if installed is not None:
-        check_replace(sftp, activation)
     made: set[str] = set()
+    make_dirs(sftp, PurePosixPath(activation), made)
+    check_replace(sftp, activation)
     for path in assets:
         make_dirs(sftp, PurePosixPath(path), made)
         mode = remote_mode(sftp, path)
@@ -221,9 +221,11 @@ def push(
                 raise ValueError(f"Unrecognized asset already exists: {path}")
             continue
         with upload(sftp, tree / path, path) as temp:
-            sftp.rename(temp, path)
+            if remote_mode(sftp, path) is not None:
+                raise ValueError(f"Asset appeared during delivery: {path}")
+            # Standard SFTP rename can require a hard link, which FAT32 cannot create.
+            sftp.posix_rename(temp, path)
 
-    make_dirs(sftp, PurePosixPath(activation), made)
     with upload(sftp, tree / activation, activation) as temp:
         check_sidecars(sftp, activation)
         if remote_digest(sftp, temp) != key:
@@ -234,10 +236,9 @@ def push(
             raise ValueError("Staged database changed during delivery")
         save(state / f"{key}.db", baseline)
         save(record, json.dumps(desired, sort_keys=True).encode())
-        if installed is None:
-            sftp.rename(temp, activation)
-        else:
-            sftp.posix_rename(temp, activation)
+        if installed is None and remote_mode(sftp, activation) is not None:
+            raise ValueError("USB database appeared during delivery")
+        sftp.posix_rename(temp, activation)
     print(f"Installed baseline: {state / f'{key}.db'}")
     print("USB delivery complete. Stop SFTP and eject the drive on Android.")
 
