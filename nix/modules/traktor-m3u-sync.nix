@@ -212,16 +212,6 @@ let
                 example = "/var/lib/playlist-sync/.ssh/dj-usb-known-hosts";
                 description = "known_hosts file pinning the device's host key.";
               };
-              remote_root = lib.mkOption {
-                type = lib.types.str;
-                example = "/storage/15F4-0A58";
-                description = "USB root as seen over SFTP.";
-              };
-              stick = lib.mkOption {
-                type = lib.types.str;
-                example = "a895a763-930c-424a-96d7-c82333e69c9c";
-                description = "UUID stored in the stick's .playlist-sync-stick marker.";
-              };
               state_dir = lib.mkOption {
                 type = lib.types.str;
                 example = "/var/lib/playlist-sync/usb-state";
@@ -243,24 +233,40 @@ let
       }
       // lib.optionalAttrs (usb.device != null) { device = usb.device; };
     };
-  usbService =
-    action: args: name: usb:
-    lib.nameValuePair "traktor-m3u-sync-usb-${action}@${name}" {
-      description = "Playlist sync USB ${action} ${name}";
+  usbBuildService =
+    name: usb:
+    lib.nameValuePair "traktor-m3u-sync-usb-build@${name}" {
+      description = "Playlist sync USB build ${name}";
       overrideStrategy = "asDropin";
       serviceConfig.ExecStart = [
         ""
-        (utils.escapeSystemdExecArgs (
-          [
+        (utils.escapeSystemdExecArgs [
+          (lib.getExe cfg.package)
+          "usb"
+          "build"
+          "--config"
+          (toString (usbConfig name usb))
+        ])
+      ];
+    };
+  # Instanced by the stick root: traktor-m3u-sync-usb-push-<name>@$(systemd-escape --path <root>).
+  usbPushService =
+    name: usb:
+    lib.nameValuePair "traktor-m3u-sync-usb-push-${name}@" {
+      description = "Playlist sync USB push ${name} to %I";
+      serviceConfig = commonServiceConfig // {
+        ExecStart = "${
+          utils.escapeSystemdExecArgs [
             (lib.getExe cfg.package)
             "usb"
-            action
+            "push"
             "--config"
             (toString (usbConfig name usb))
+            "--apply"
+            "--root"
           ]
-          ++ args
-        ))
-      ];
+        } %I";
+      };
     };
   usbPushExports = lib.filterAttrs (_: usb: usb.device != null) usbExports;
 
@@ -541,7 +547,7 @@ in
     usb = lib.mkOption {
       type = lib.types.attrsOf usbModule;
       default = { };
-      description = "Named USB exports: a build unit staging a verified generation and, with a device, a push unit delivering it.";
+      description = "Named USB exports: a build unit and, with a device, a push template instanced by the stick root.";
     };
   };
 
@@ -595,11 +601,8 @@ in
       // lib.optionalAttrs (usbExports != { }) {
         "traktor-m3u-sync-usb-build@" = templateService "usb build";
       }
-      // lib.optionalAttrs (usbPushExports != { }) {
-        "traktor-m3u-sync-usb-push@" = templateService "usb push";
-      }
       // builtins.listToAttrs (lib.mapAttrsToList instanceService jobs)
-      // builtins.listToAttrs (lib.mapAttrsToList (usbService "build" [ ]) usbExports)
-      // builtins.listToAttrs (lib.mapAttrsToList (usbService "push" [ "--apply" ]) usbPushExports);
+      // builtins.listToAttrs (lib.mapAttrsToList usbBuildService usbExports)
+      // builtins.listToAttrs (lib.mapAttrsToList usbPushService usbPushExports);
   };
 }

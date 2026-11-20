@@ -14,7 +14,7 @@ import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, cast
 
 MANIFEST = "manifest.json"
@@ -31,9 +31,8 @@ class GenerationError(RuntimeError):
 class Entry:
     sha256: str
     size: int
-    # External media, read at delivery time and stored at a content-addressed path, so it
-    # never replaces a file on the stick. None means a library file inside the staged tree,
-    # which delivery may replace in place.
+    # Media is read from its source at delivery and lives at a content-addressed path on the
+    # stick; None marks a staged library file, which delivery may replace in place.
     source: Path | None = None
 
 
@@ -41,7 +40,7 @@ class Entry:
 class Generation:
     path: Path
     files: Mapping[str, Entry]
-    # Published last, after every other file is present on the stick.
+    # Installed last, once every other file is on the stick.
     activation: str
 
     @property
@@ -49,13 +48,7 @@ class Generation:
         return self.path / TREE
 
     def local(self, name: str) -> Path:
-        entry = self.files[name]
-        if entry.source is None:
-            return self.tree / name
-        stat = entry.source.stat()
-        if stat.st_size != entry.size:
-            raise GenerationError(f"Source changed since the build; rebuild: {entry.source}")
-        return entry.source
+        return self.files[name].source or self.tree / name
 
 
 def file_sha256(path: Path) -> str:
@@ -64,7 +57,7 @@ def file_sha256(path: Path) -> str:
 
 
 class HashCache:
-    """SHA-256 of external media, reused while a file's size and mtime are unchanged."""
+    """SHA-256 of media files, reused while size and mtime are unchanged."""
 
     def __init__(self, path: Path) -> None:
         self._path = path
@@ -88,7 +81,6 @@ class HashCache:
 
 
 def start(output_dir: Path) -> Path:
-    """Create an empty generation directory; nothing points at it until :func:`publish`."""
     generations = output_dir / "generations"
     generations.mkdir(parents=True, exist_ok=True)
     name = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
@@ -98,17 +90,6 @@ def start(output_dir: Path) -> Path:
 
 
 def publish(path: Path, files: Mapping[str, Entry], activation: str) -> Generation:
-    tree = path / TREE
-    names = {name.casefold() for name in files}
-    if len(names) != len(files):
-        raise GenerationError("Case-insensitive path collision in the generation")
-    for name, entry in files.items():
-        if PurePosixPath(name).is_absolute() or ".." in PurePosixPath(name).parts:
-            raise GenerationError(f"Unsafe generation path: {name}")
-        if entry.source is None and file_sha256(tree / name) != entry.sha256:
-            raise GenerationError(f"Staged file does not match its manifest: {name}")
-    if activation not in files:
-        raise GenerationError(f"Generation is missing its activation file {activation}")
     _write_json(
         path / MANIFEST,
         {

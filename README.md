@@ -312,27 +312,27 @@ port = 2222
 user = "me"
 key_file = "~/.ssh/dj-usb"
 known_hosts = "~/.ssh/dj-usb-known-hosts"     # pins the device's host key
-remote_root = "/storage/15F4-0A58"              # USB root as seen over SFTP
-stick = "a895a763-930c-424a-96d7-c82333e69c9c" # UUID in the stick's .playlist-sync-stick
 state_dir = "~/.local/state/playlist-sync/usb"
 ```
 
 - `usb build` stages a standalone Engine library for the playlist tree as a native copy of
-  the source database, so its analysis is kept as Engine wrote it. Engine must be closed. The
-  stick keeps one device UUID across builds, and media sits at content-addressed paths, so
-  unchanged files keep their paths. Audio is not copied into the staged tree; delivery reads it
-  from the library. A failed build leaves the previous generation current.
-- `usb push` previews by default; `--apply` sends only files whose content differs from what
-  the stick last received, then installs the database. Interrupting it leaves the stick's
-  previous library working. Delivery needs SFTP `posix-rename` with overwrite, which it checks
-  first. It refuses a stick database that differs from the one last installed (for example,
-  after edits on the player) and keeps a copy; `--reviewed <sha256>` allows replacing that exact
-  database.
-- `usb pull` copies the stick database into the state directory and reports whether it changed
-  since delivery.
+  the source database, so its analysis is kept as Engine wrote it. Engine must be closed. Every
+  build of one output keeps the same Engine drive UUID, and media sits at content-addressed
+  paths, so unchanged files keep their paths. Audio is read from the library at delivery rather
+  than staged. A failed build leaves the previous generation current.
+- `usb push --root <path>` delivers to the stick mounted at that path on the SFTP server. It
+  previews by default; `--apply` sends only files whose content differs from what that stick
+  last received, then installs the database, so an interrupted push leaves the previous library
+  working and a retry resends nothing already complete. Delivery needs SFTP `posix-rename` with
+  overwrite, which it checks first. It refuses a stick database that differs from the one it last
+  installed (after edits on the player, or on a stick another tool wrote) and keeps a copy;
+  `--reviewed <sha256>` allows replacing that exact database.
+- `usb pull --root <path>` copies the stick database into the state directory and reports
+  whether it changed since delivery.
 
-Write a UUID to `.playlist-sync-stick` at the stick root once. After a push, stop the SFTP
-server and eject the stick on the device before unplugging it.
+A stick is identified by the UUID in `.playlist-sync-stick` at its root, written by its first
+push, so any number of sticks share one configuration. After a push, stop the SFTP server and
+eject the stick on the device before unplugging it.
 
 ## Track identity
 

@@ -38,7 +38,7 @@ Decoding and re-encoding an Engine `beatData`, `quickCues` or `loops` blob SHALL
 
 ### Requirement: Deliver USB generations over SFTP
 
-`usb push` SHALL connect with a pinned host key, verify the stick's marker, and send only files whose content differs from what that stick last received. It SHALL install the library database after every other file and record the delivery only then. It SHALL refuse to replace a stick database that differs from the one last installed, unless that exact database was reviewed. `usb pull` SHALL copy the stick database for review and report whether it changed since delivery.
+`usb push` SHALL deliver to the stick root given for the run, over SFTP with a pinned host key, identifying the stick by the UUID in its marker and writing one on first delivery. It SHALL send only files whose content differs from what that stick last received. It SHALL install the library database after every other file and record the delivery only then. It SHALL refuse to replace a stick database that differs from the one last installed, unless that exact database was reviewed. `usb pull` SHALL copy the stick database for review and report whether it changed since delivery.
 
 #### Scenario: Repeat delivery
 - **WHEN** the same generation is pushed again

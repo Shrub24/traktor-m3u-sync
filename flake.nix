@@ -159,8 +159,6 @@
                               user = "me";
                               key_file = "/var/lib/playlist-sync/.ssh/dj-usb";
                               known_hosts = "/var/lib/playlist-sync/.ssh/known_hosts";
-                              remote_root = "/storage/15F4-0A58";
-                              stick = "a895a763-930c-424a-96d7-c82333e69c9c";
                               state_dir = "/var/lib/playlist-sync/usb-state";
                             };
                           };
@@ -183,18 +181,17 @@
                 external = services."traktor-m3u-sync-export@external";
                 reporting = services."traktor-m3u-sync-export@reporting";
                 usbBuild = services."traktor-m3u-sync-usb-build@sc6000";
-                usbPush = services."traktor-m3u-sync-usb-push@sc6000";
+                usbPush = services."traktor-m3u-sync-usb-push-sc6000@";
                 usbOk =
                   builtins.match ".*\"usb\" \"build\" \"--config\" .*" (
                     builtins.elemAt usbBuild.serviceConfig.ExecStart 1
                   ) != null
                   &&
-                    builtins.match ".*\"usb\" \"push\" \"--config\" .* \"--apply\"" (
-                      builtins.elemAt usbPush.serviceConfig.ExecStart 1
-                    ) != null
+                    builtins.match ".*\"usb\" \"push\" \"--config\" .* \"--root\" %I" usbPush.serviceConfig.ExecStart
+                    != null
+                  && usbPush.serviceConfig.User == "playlist-sync"
                   && builtins.hasAttr "traktor-m3u-sync-usb-build@buildOnly" services
-                  && !(builtins.hasAttr "traktor-m3u-sync-usb-push@buildOnly" services)
-                  && services."traktor-m3u-sync-usb-push@".serviceConfig.User == "playlist-sync";
+                  && !(builtins.hasAttr "traktor-m3u-sync-usb-push-buildOnly@" services);
                 importTemplate = services."traktor-m3u-sync-import@";
                 exportTemplate = services."traktor-m3u-sync-export@";
                 legacyAbsent =
@@ -331,9 +328,9 @@
                 ${if reportOk then "" else "echo 'FAIL: reportFile argv escaping'; exit 1"}
                 ${if usbOk then "" else "echo 'FAIL: USB build/push units'; exit 1"}
 
-                usb_config=$(echo '${builtins.elemAt usbPush.serviceConfig.ExecStart 1}' | sed 's/.*"--config" "\([^"]*\)".*/\1/')
-                for command in build push; do
-                  if traktor-m3u-sync usb "$command" --config "$usb_config" > loader.out 2>&1; then
+                usb_config=$(echo '${usbPush.serviceConfig.ExecStart}' | sed 's/.*"--config" "\([^"]*\)".*/\1/')
+                for command in build "push --root /stick"; do
+                  if traktor-m3u-sync usb $command --config "$usb_config" > loader.out 2>&1; then
                     echo "FAIL: CLI unexpectedly completed USB $command fixture"
                     exit 1
                   fi

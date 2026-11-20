@@ -192,13 +192,13 @@ def engine_analysis(
     typer.echo(json.dumps({str(track_id): done for track_id, done in saved.items()}))
 
 
-usb_app = typer.Typer(help="Build USB library exports and deliver them to a stick over SFTP.")
+usb_app = typer.Typer(help="Build USB library exports and deliver them over SFTP.")
 app.add_typer(usb_app, name="usb")
 
 
 @usb_app.command(name="build")
 def usb_build(config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config")) -> None:
-    """Stage a new Engine USB generation from the closed Engine library ([usb.engine])."""
+    """Stage a new Engine USB generation from the closed Engine library."""
     result = _usb_step(lambda: usb.build(**vars(load_engine_usb_config(config))))
     typer.echo(
         f"SUMMARY generation={result.generation.path.name} playlists={result.playlists} "
@@ -208,22 +208,24 @@ def usb_build(config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config")) -> N
 
 @usb_app.command(name="push")
 def usb_push(
+    root: str = typer.Option(..., "--root", help="Stick root path on the SFTP server"),
     config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
     apply: bool = typer.Option(False, "--apply", help="Write to the stick; default previews"),
     reviewed: str | None = typer.Option(
-        None, "--reviewed", help="SHA-256 of an edited stick database that was reviewed"
+        None, "--reviewed", help="SHA-256 of an edited stick database that may be replaced"
     ),
 ) -> None:
-    """Send the current Engine generation's changed files, then its database, to the stick."""
+    """Send the current Engine generation's changed files, then its database."""
 
     def run() -> sftp.PushResult:
         engine = load_engine_usb_config(config)
         device = load_usb_device_config(config)
-        with sftp.connect(device) as client:
+        with sftp.session(device) as client:
+            stick = sftp.enter_stick(client, root, mark=apply)
             return sftp.push(
                 client,
                 generation.current(engine.output_dir),
-                sftp.StickState(device),
+                sftp.StickState(device.state_dir, stick),
                 apply=apply,
                 reviewed=reviewed,
             )
@@ -240,13 +242,17 @@ def usb_push(
 
 
 @usb_app.command(name="pull")
-def usb_pull(config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config")) -> None:
-    """Copy the stick's library database for review; reports whether it changed since delivery."""
+def usb_pull(
+    root: str = typer.Option(..., "--root", help="Stick root path on the SFTP server"),
+    config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
+) -> None:
+    """Copy the stick's database for review and report whether it changed since delivery."""
 
     def run() -> sftp.PullResult:
         device = load_usb_device_config(config)
-        with sftp.connect(device) as client:
-            return sftp.pull(client, sftp.StickState(device), usb.DATABASE)
+        with sftp.session(device) as client:
+            stick = sftp.enter_stick(client, root, mark=False)
+            return sftp.pull(client, sftp.StickState(device.state_dir, stick), usb.DATABASE)
 
     result = _usb_step(run)
     typer.echo(f"SNAPSHOT {result.snapshot}")

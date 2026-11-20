@@ -6,7 +6,6 @@ import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Final, cast
-from uuid import UUID
 
 from .paths.uri import FileUriError, FileUriMapping
 
@@ -119,7 +118,6 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
 class EngineUsbConfig:
     library: Path
     output_dir: Path
-    # Top-level Engine playlist to export with its descendants; None exports every playlist.
     playlist_root: str | None = None
 
 
@@ -129,8 +127,6 @@ class UsbDeviceConfig:
     user: str
     key_file: Path
     known_hosts: Path
-    remote_root: str
-    stick: UUID
     state_dir: Path
     port: int = 22
 
@@ -147,36 +143,28 @@ def load_engine_usb_config(path: Path) -> EngineUsbConfig:
 
 
 def load_usb_device_config(path: Path) -> UsbDeviceConfig:
-    table = _usb_table(path, "device")
     section = "usb.device"
-    values = {
-        key: _optional_string(table, key, section)
-        for key in ("host", "user", "key_file", "known_hosts", "remote_root", "stick", "state_dir")
-    }
-    missing = sorted(key for key, value in values.items() if value is None)
+    table = _usb_table(path, "device")
+    keys = ("host", "user", "key_file", "known_hosts", "state_dir")
+    values = {key: _optional_string(table, key, section) for key in keys}
+    missing = [key for key in keys if values[key] is None]
     if missing:
         raise ConfigError(f"[{section}] requires {', '.join(missing)}")
     port = table.get("port", 22)
     if isinstance(port, bool) or not isinstance(port, int) or not 0 < port < 65536:
         raise ConfigError(f"Field 'port' in [{section}] must be a TCP port")
-    try:
-        stick = UUID(cast(str, values["stick"]))
-    except ValueError as exc:
-        raise ConfigError(f"Field 'stick' in [{section}] must be a UUID") from exc
+    text = cast(dict[str, str], values)
     return UsbDeviceConfig(
-        host=cast(str, values["host"]),
-        user=cast(str, values["user"]),
-        key_file=Path(cast(str, values["key_file"])).expanduser(),
-        known_hosts=Path(cast(str, values["known_hosts"])).expanduser(),
-        remote_root=cast(str, values["remote_root"]),
-        stick=stick,
-        state_dir=Path(cast(str, values["state_dir"])).expanduser(),
+        host=text["host"],
+        user=text["user"],
+        key_file=Path(text["key_file"]).expanduser(),
+        known_hosts=Path(text["known_hosts"]).expanduser(),
+        state_dir=Path(text["state_dir"]).expanduser(),
         port=port,
     )
 
 
 def _usb_table(path: Path, name: str) -> dict[str, Any]:
-    """USB commands read only their own [usb.<name>] table, not the playlist store config."""
     return _require_table(_require_table(_read_toml(path), "usb"), name)
 
 

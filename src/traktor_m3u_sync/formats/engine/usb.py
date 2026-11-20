@@ -44,12 +44,9 @@ class BuildResult:
 
 
 def build(library: Path, output_dir: Path, playlist_root: str | None) -> BuildResult:
-    """Stage and publish a new generation; the previous one stays until this one is complete."""
     library = library.resolve(strict=True)
     source_db = library / "Database2" / "m.db"
     output_dir.mkdir(parents=True, exist_ok=True)
-    if output_dir.resolve().is_relative_to(library):
-        raise EngineUsbError("The USB output must not be inside the Engine library")
     with (output_dir / "lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         device = _device_uuid(output_dir / "device.json")
@@ -87,8 +84,6 @@ def _stage(
         ).fetchone()
         if tuple(version) != SCHEMA_VERSION:
             raise EngineUsbError(f"Engine schema {tuple(version)!r} is unsupported")
-        if uuid.UUID(source_uuid) == device:
-            raise EngineUsbError("Device UUID equals the source library UUID")
         db.execute("PRAGMA foreign_keys = ON")
         db.execute("PRAGMA recursive_triggers = ON")
         with db:
@@ -171,8 +166,7 @@ def _assets(
         if size >= _FAT32_MAX:
             raise EngineUsbError(f"Track exceeds the FAT32 file size limit: {audio}")
         name = _UNSAFE.sub("_", audio.name).rstrip(". ")
-        # The content hash in the path means changed audio never replaces a file the
-        # installed database still references.
+        # Changed audio gets a new path, so it never replaces a file the installed database uses.
         relative = PurePosixPath("Music", str(track_id), digest, f"{track_id}-{name}")
         files[f"{LIBRARY}/{relative}"] = Entry(digest, size, source=audio)
         db.execute(
@@ -190,7 +184,7 @@ def _assets(
 
 
 def _device_uuid(path: Path) -> uuid.UUID:
-    """One device UUID per output, kept across builds so unchanged files keep their paths."""
+    """Kept across builds: overview paths include it, so a new one would resend every file."""
     if path.is_file():
         return uuid.UUID(json.loads(path.read_text())["uuid"])
     device = uuid.uuid4()

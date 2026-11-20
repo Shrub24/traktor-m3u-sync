@@ -21,7 +21,7 @@ from traktor_m3u_sync.formats.engine import usb
 from traktor_m3u_sync.formats.engine.usb import DATABASE, EngineUsbError
 from traktor_m3u_sync.usb import generation
 from traktor_m3u_sync.usb.generation import Generation
-from traktor_m3u_sync.usb.sftp import DeliveryError, StickState, pull, push
+from traktor_m3u_sync.usb.sftp import DeliveryError, StickState, enter_stick, pull, push
 
 SCHEMA = (Path(__file__).parent / "fixtures" / "engine_3_0_2_schema.sql").read_text()
 SOURCE = uuid.UUID("8ae3af13-4aae-44e6-91c2-8abc483ba2c9")
@@ -148,14 +148,16 @@ def test_failed_build_keeps_the_previous_generation(tmp_path: Path) -> None:
 
 
 class _Stick(SFTPClient):
-    """OpenSSH sftp-server on a socket pair, with an injectable failure on rename."""
+    """OpenSSH sftp-server on a socket pair, recording publications and failing on demand."""
 
     fail_on: str | None = None
+    published: list[str]
 
     def posix_rename(self, oldpath: str | bytes, newpath: str | bytes) -> None:
         if newpath == self.fail_on:
             raise OSError("connection lost")
         super().posix_rename(oldpath, newpath)
+        self.published.append(str(newpath))
 
 
 class _Socket(socket.socket):
@@ -180,49 +182,76 @@ def stick(tmp_path: Path) -> Iterator[tuple[_Stick, Path]]:
         server.close()
         # paramiko only needs send/recv/close from its transport, which a socket provides.
         with _Stick(cast(Channel, client)) as sftp:
+            sftp.published = []
             yield sftp, root
         client.close()
         assert proc.wait(timeout=5) == 0
 
 
-def _state(tmp_path: Path) -> StickState:
-    state = StickState.__new__(StickState)
-    state.path = tmp_path / "state"
-    state.path.mkdir(exist_ok=True)
-    return state
+def _state(sftp: SFTPClient, root: Path, tmp_path: Path) -> StickState:
+    root.mkdir(exist_ok=True)
+    return StickState(tmp_path / "state", enter_stick(sftp, str(root), mark=True))
 
 
-def test_push_is_incremental_and_database_last(tmp_path: Path, stick: tuple[_Stick, Path]) -> None:
+def _media(published: list[str]) -> list[str]:
+    return [name for name in published if name.startswith("Engine Library/Music/")]
+
+
+def test_push_is_incremental_resumable_and_database_last(
+    tmp_path: Path, stick: tuple[_Stick, Path]
+) -> None:
     sftp, root = stick
     library = Library(tmp_path)
     playlist = library.playlist("Sync")
     library.add(playlist, library.track("one.mp3", b"one"))
-    state = _state(tmp_path)
+    state = _state(sftp, root, tmp_path)
 
     built = _build(library, tmp_path / "out")
     preview = push(sftp, built, state, apply=False)
     assert DATABASE in preview.files and not (root / DATABASE).exists()
-    first = push(sftp, built, state, apply=True)
-    assert set(first.files) == set(built.files)
+    push(sftp, built, state, apply=True)
     installed = (root / DATABASE).read_bytes()
     assert installed == (built.tree / DATABASE).read_bytes()
+    sftp.published.clear()
     assert push(sftp, built, state, apply=True).files == ()
+    assert sftp.published == []
 
-    new = library.track("new.mp3", b"new")
-    library.add(playlist, new)
+    library.add(playlist, library.track("new.mp3", b"new"))
     updated = _build(library, tmp_path / "out")
-    media = next(k for k, v in updated.files.items() if v.source == library.music / "new.mp3")
-    sftp.fail_on = media
+    sftp.fail_on = DATABASE
     with pytest.raises(OSError, match="connection lost"):
         push(sftp, updated, state, apply=True)
     assert (root / DATABASE).read_bytes() == installed
-    assert not (root / media).exists()
+    (media,) = _media(sftp.published)
+    assert (root / media).read_bytes() == b"new"
 
     sftp.fail_on = None
-    retry = push(sftp, updated, state, apply=True)
-    assert [k for k in retry.files if k.startswith("Engine Library/Music/")] == [media]
-    assert (root / media).read_bytes() == b"new"
+    sftp.published.clear()
+    push(sftp, updated, state, apply=True)
+    assert _media(sftp.published) == []
+    assert sftp.published[-1] == DATABASE
     assert (root / DATABASE).read_bytes() == (updated.tree / DATABASE).read_bytes()
+
+
+def test_each_stick_gets_its_own_identity_and_delivery(
+    tmp_path: Path, stick: tuple[_Stick, Path]
+) -> None:
+    sftp, root = stick
+    library = Library(tmp_path)
+    library.add(library.playlist("Sync"), library.track("one.mp3", b"one"))
+    built = _build(library, tmp_path / "out")
+    first = _state(sftp, root / "a", tmp_path)
+    push(sftp, built, first, apply=True)
+    (root / "b").mkdir()
+    with pytest.raises(DeliveryError, match="nothing was delivered"):
+        enter_stick(sftp, str(root / "b"), mark=False)
+
+    second = _state(sftp, root / "b", tmp_path)
+    assert second.path != first.path
+    sftp.published.clear()
+    push(sftp, built, second, apply=True)
+    assert len(_media(sftp.published)) == 1
+    assert enter_stick(sftp, str(root / "a"), mark=False) == uuid.UUID(first.path.name)
 
 
 def test_edited_stick_database_is_kept_until_reviewed(
@@ -231,7 +260,7 @@ def test_edited_stick_database_is_kept_until_reviewed(
     sftp, root = stick
     library = Library(tmp_path)
     library.add(library.playlist("Sync"), library.track("one.mp3", b"one"))
-    state = _state(tmp_path)
+    state = _state(sftp, root, tmp_path)
     push(sftp, _build(library, tmp_path / "out"), state, apply=True)
     assert pull(sftp, state, DATABASE).changed is False
 
