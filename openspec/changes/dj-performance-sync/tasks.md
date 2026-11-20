@@ -21,6 +21,7 @@
 - [x] 3.2a Shared `[usb]` configuration and `usb build` running Pioneer into a persistent working tree
 - [x] 3.3 Format selection and recoverable database-last delivery to one stick
 - [ ] 3.4 Export opens in rekordbox desktop with Engine's grid and cues
+- [x] 3.5 Export a reference rekordbox XML from Engine's saved performance
 
 ## 4. Engine read-back and write-back
 

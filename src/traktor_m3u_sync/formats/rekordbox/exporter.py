@@ -31,9 +31,7 @@ class RekordboxExporter:
 
     def write(self, playlists: Sequence[Playlist]) -> SyncResult:
         collection = collect_tracks(playlists, self.check_base_path)
-        root = ET.Element("DJ_PLAYLISTS", Version=FORMAT_VERSION)
-        ET.SubElement(root, "PRODUCT", Name=PRODUCT_NAME, Version="", Company="")
-        tracks = ET.SubElement(root, "COLLECTION", Entries=str(len(collection.tracks)))
+        root, tracks = document(len(collection.tracks))
         for entry in collection.tracks:
             attributes = {
                 "TrackID": str(entry.track_id),
@@ -46,10 +44,7 @@ class RekordboxExporter:
             if entry.track.duration_seconds is not None:
                 attributes["TotalTime"] = str(entry.track.duration_seconds)
             ET.SubElement(tracks, "TRACK", attributes)
-        tree = ET.SubElement(root, "PLAYLISTS")
-        tree.append(_playlist_tree(playlists, collection))
-        ET.indent(root)
-        write_atomic(self.output_file, ET.tostring(root, encoding="UTF-8", xml_declaration=True))
+        publish_xml(root, _playlist_tree(playlists, collection), self.output_file)
 
         counts = {
             "playlists_written": len(playlists),
@@ -58,6 +53,27 @@ class RekordboxExporter:
             "warnings_emitted": len(collection.warnings),
         }
         return SyncResult(counts=counts, warnings=tuple(collection.warnings))
+
+
+def document(entries: int) -> tuple[ET.Element, ET.Element]:
+    root = ET.Element("DJ_PLAYLISTS", Version=FORMAT_VERSION)
+    ET.SubElement(root, "PRODUCT", Name=PRODUCT_NAME, Version="", Company="")
+    return root, ET.SubElement(root, "COLLECTION", Entries=str(entries))
+
+
+def publish_xml(document: ET.Element, tree: ET.Element, output: Path) -> None:
+    ET.SubElement(document, "PLAYLISTS").append(tree)
+    ET.indent(document)
+    write_atomic(output, ET.tostring(document, encoding="UTF-8", xml_declaration=True))
+
+
+def playlist_node(name: str, keys: Sequence[int]) -> ET.Element:
+    node = ET.Element(
+        "NODE", Type=_PLAYLIST, Name=name, KeyType=_KEY_BY_TRACK_ID, Entries=str(len(keys))
+    )
+    for key in keys:
+        ET.SubElement(node, "TRACK", Key=str(key))
+    return node
 
 
 def _playlist_tree(playlists: Sequence[Playlist], collection: Collection) -> ET.Element:
@@ -70,17 +86,9 @@ def _playlist_tree(playlists: Sequence[Playlist], collection: Collection) -> ET.
         return folders[path]
 
     for playlist in playlists:
-        keys = collection.playlist_ids(playlist)
-        node = ET.SubElement(
-            folder(playlist.folder_path),
-            "NODE",
-            Type=_PLAYLIST,
-            Name=playlist.name,
-            KeyType=_KEY_BY_TRACK_ID,
-            Entries=str(len(keys)),
+        folder(playlist.folder_path).append(
+            playlist_node(playlist.name, collection.playlist_ids(playlist))
         )
-        for key in keys:
-            ET.SubElement(node, "TRACK", Key=str(key))
     for node in folders.values():
         node.set("Count", str(len(node)))
     return root

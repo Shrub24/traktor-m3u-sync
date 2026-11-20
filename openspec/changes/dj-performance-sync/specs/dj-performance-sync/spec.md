@@ -52,6 +52,14 @@ Decoding and re-encoding an Engine `beatData`, `quickCues` or `loops` blob SHALL
 - **WHEN** a playlist holds both tracks and playlists
 - **THEN** the export fails, since a Pioneer folder cannot hold tracks
 
+### Requirement: Export a rekordbox XML reference library
+
+`usb rekordbox-xml` SHALL read the same closed Engine library and playlist selection as the USB build. It SHALL emit an ordered rekordbox playlist XML with consumer-side file URIs and Engine's saved key, grid, main cue, hot cues and loops. It SHALL NOT alter the playlist-store XML export.
+
+#### Scenario: Grid starts before the audio
+- **WHEN** Engine's first grid marker is before zero
+- **THEN** XML anchors the grid at the first in-range beat with its saved tempo and beat-in-bar
+
 ### Requirement: Deliver USB generations over SFTP
 
 `usb build` and `usb push` SHALL share one `[usb]` configuration and use all enabled formats unless narrowed by repeatable `--format`. Push SHALL use pinned SFTP and the stick's marker UUID to track changed files per format, installing databases last.

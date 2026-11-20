@@ -340,6 +340,24 @@ A stick is identified by the UUID in `.playlist-sync-stick` at its root, written
 push, so any number of sticks share one configuration. After a push, stop the SFTP server and
 eject the stick on the device before unplugging it.
 
+### Native rekordbox reference export
+
+With Engine closed, use the same USB config to make the XML:
+
+```sh
+traktor-m3u-sync usb rekordbox-xml --config ./usb.toml \
+  --output-file ./rekordbox-reference.xml \
+  --location-base 'file://localhost/M:/Engine%20Library'
+```
+
+Set `--location-base` to the URI of **Engine Library as seen by rekordbox**, not the
+Linux path or the audio directory. For example, Engine's `../library/a.mp3` becomes
+`file://localhost/M:/library/a.mp3` with the base above. This XML carries the saved
+key, grid, main cue, hot cues and loops; it does not generate waveforms. Import the
+same playlist into a scratch rekordbox collection and export to a separate USB
+volume for comparison. Check that rekordbox retains the grid and cues before
+exporting. The playlist-store `export --format rekordbox` is unchanged.
+
 ## Track identity
 
 - primary identity is the casefolded POSIX library-relative path

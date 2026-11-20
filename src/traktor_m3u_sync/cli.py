@@ -22,6 +22,10 @@ from .config import (
 from .contracts import AdapterWarning, SyncResult
 from .formats.engine import usb
 from .formats.engine.analysis import managed_analysis_saved
+from .formats.engine.performance import capture
+from .formats.rekordbox.performance import write_snapshot
+from .model.performance import select
+from .paths.uri import FileUriMapping
 from .reporting import utc_now, write_run_report
 from .services import run_export, run_import
 from .usb import generation, pioneer, sftp
@@ -213,6 +217,26 @@ def usb_build(
                 args = (settings.library, settings.output_dir / name, settings.playlist_root)
                 result = usb.build(*args).generation if name == "engine" else pioneer.build(*args)
                 typer.echo(f"SUMMARY format={name} generation={result.path.name}")
+
+    _usb_step(run)
+
+
+@usb_app.command(name="rekordbox-xml")
+def usb_rekordbox_xml(
+    output: Path = typer.Option(..., "--output-file"),
+    location_base: str = typer.Option(
+        ..., "--location-base", help="Engine Library folder's file: URI in rekordbox"
+    ),
+    config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
+) -> None:
+    """Export the closed Engine library to XML for a native rekordbox reference build."""
+
+    def run() -> None:
+        settings = load_usb_config(config)
+        locations = FileUriMapping(location_base)
+        snapshot = select(capture(settings.library / "Database2/m.db"), settings.playlist_root)
+        write_snapshot(snapshot, locations, output)
+        typer.echo(f"SUMMARY tracks={len(snapshot.tracks)} output={output}")
 
     _usb_step(run)
 

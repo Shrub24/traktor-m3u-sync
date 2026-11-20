@@ -9,10 +9,13 @@ import zlib
 from dataclasses import replace
 from pathlib import Path
 from uuid import UUID
+from xml.etree import ElementTree as ET
 
 import pytest
 from engine_blobs import REAL_BEAT_DATA, REAL_LOOPS, REAL_QUICK_CUES
+from typer.testing import CliRunner
 
+from traktor_m3u_sync.cli import app
 from traktor_m3u_sync.formats.engine.performance import (
     EnginePerformanceError,
     capture,
@@ -263,6 +266,54 @@ def test_snapshot_json_round_trips(tmp_path: Path) -> None:
 def test_snapshot_json_rejects_unknown_or_malformed_content(text: str) -> None:
     with pytest.raises(SnapshotError):
         loads(text)
+
+
+def test_rekordbox_xml_exports_selected_engine_grid_cues_and_playlist(tmp_path: Path) -> None:
+    library = tmp_path / "Engine Library"
+    database = library / "Database2/m.db"
+    database.parent.mkdir(parents=True)
+    _engine_db(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute("DELETE FROM PlaylistEntity WHERE id = 22")
+    config = tmp_path / "usb.toml"
+    config.write_text(
+        f'[usb]\nlibrary = "{library}"\noutput_dir = "{tmp_path / "out"}"\nplaylist_root = "Sync"\n'
+    )
+    output = tmp_path / "reference.xml"
+    result = CliRunner().invoke(
+        app,
+        [
+            "usb",
+            "rekordbox-xml",
+            "--config",
+            str(config),
+            "--output-file",
+            str(output),
+            "--location-base",
+            "file://localhost/M:/Engine%20Library",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    xml = ET.parse(output)
+    by_location = {track.attrib["Location"]: track for track in xml.findall("./COLLECTION/TRACK")}
+    a = by_location["file://localhost/M:/library/a.mp3"]
+    b = by_location["file://localhost/M:/library/b.mp3"]
+    assert a.attrib["Tonality"] == "Am"
+    (tempo,) = a.findall("TEMPO")
+    assert float(tempo.attrib["Bpm"]) == pytest.approx(145, abs=0.02)
+    assert float(tempo.attrib["Inizio"]) == pytest.approx(0.1062, abs=0.0001)
+    assert tempo.attrib["Battito"] == "1"
+    assert not b.findall("TEMPO") and "Tonality" not in b.attrib
+    assert {
+        (mark.attrib["Type"], mark.attrib["Num"], float(mark.attrib["Start"]))
+        for mark in a.findall("POSITION_MARK")
+    } == {("0", "-1", 0.5), ("0", "1", 2.0), ("4", "-1", 1.0)}
+    (loop,) = a.findall("POSITION_MARK[@Type='4']")
+    assert float(loop.attrib["End"]) == 2.0
+    assert [track.attrib["Key"] for track in xml.findall("./PLAYLISTS/NODE/NODE/NODE/TRACK")] == [
+        b.attrib["TrackID"],
+        a.attrib["TrackID"],
+    ]
 
 
 SHARED_SNAPSHOT = Path(__file__).parent / "fixtures" / "snapshot.json"
