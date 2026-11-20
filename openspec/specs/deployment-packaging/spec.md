@@ -12,6 +12,10 @@ The project SHALL expose a Nix-native runtime package for the `traktor-m3u-sync`
 - **THEN** the result contains the `traktor-m3u-sync` executable and its runtime dependencies
 - **AND** does not depend on the development shell to run the application
 
+#### Scenario: Build the Pioneer USB helper through the NixOS module
+- **WHEN** the module builds the default package using the host's nixpkgs
+- **THEN** the Pioneer helper uses the declared OpenSSL and SQLCipher dependencies from that package set
+
 ### Requirement: Provide a flake app for direct execution
 The project SHALL expose a flake app that runs the packaged CLI through `nix run`.
 

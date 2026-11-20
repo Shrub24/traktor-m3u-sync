@@ -1,7 +1,9 @@
 {
   lib,
   rustPlatform,
-  perl,
+  openssl,
+  pkg-config,
+  sqlcipher,
 }:
 rustPlatform.buildRustPackage {
   pname = "pioneer-usb";
@@ -22,8 +24,15 @@ rustPlatform.buildRustPackage {
     lockFile = ../../pioneer-usb/Cargo.lock;
     outputHashes."rbl-analysis-1.10.0" = "sha256-uwevTD94eLfaDRfE3Ithe486oDt5yXvm8NHhXi4QJGg=";
   };
-  # Vendored OpenSSL for SQLCipher.
-  nativeBuildInputs = [ perl ];
+  nativeBuildInputs = [ pkg-config ];
+  buildInputs = [
+    openssl
+    sqlcipher
+  ];
+  env = {
+    OPENSSL_NO_VENDOR = "1";
+    LIBSQLITE3_SYS_USE_PKG_CONFIG = "1";
+  };
   meta = {
     description = "Pioneer USB library writer for traktor-m3u-sync snapshots";
     license = lib.licenses.gpl3Plus;
