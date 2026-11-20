@@ -36,6 +36,22 @@ Decoding and re-encoding an Engine `beatData`, `quickCues` or `loops` blob SHALL
 - **WHEN** the library is rebuilt unchanged
 - **THEN** every file other than the database keeps its path and content hash
 
+### Requirement: Write Pioneer USB libraries from a snapshot
+
+`pioneer-usb` SHALL write a Pioneer USB library for a snapshot's playlist tree, in its order, with each track's beat grid, key, main cue, hot cues and saved loops taken from the snapshot and only waveforms computed from the audio. Every beat of the grid SHALL be written, with beats whose index is divisible by 4 as downbeats. Comments SHALL NOT be exported; names in a comment's `/* a / b */` lists SHALL become My Tags. It SHALL fail when the written library does not verify.
+
+#### Scenario: Half-time grid
+- **WHEN** Engine's saved grid is half the displayed BPM
+- **THEN** the Pioneer grid and BPM follow the saved grid
+
+#### Scenario: Tagged comment
+- **WHEN** a track's comment is `1A - Energy 6 /* Groove / Dub */`
+- **THEN** the track carries My Tags `Groove` and `Dub` and no comment
+
+#### Scenario: Folder holding tracks
+- **WHEN** a playlist holds both tracks and playlists
+- **THEN** the export fails, since a Pioneer folder cannot hold tracks
+
 ### Requirement: Deliver USB generations over SFTP
 
 `usb push` SHALL deliver to the stick root given for the run, over SFTP with a pinned host key, identifying the stick by the UUID in its marker and writing one on first delivery. It SHALL send only files whose content differs from what that stick last received. It SHALL install the library database after every other file and record the delivery only then. It SHALL refuse to replace a stick database that differs from the one last installed, unless that exact database was reviewed.

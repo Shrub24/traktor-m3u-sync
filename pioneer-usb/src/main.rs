@@ -1,7 +1,8 @@
 //! Writes a Pioneer USB library from a traktor-m3u-sync snapshot.
 //!
 //! Grid, key and cues come from the snapshot unchanged; only the waveforms are computed,
-//! from the audio, and cached by file so each is analysed once.
+//! from the audio, and cached by file so each is analysed once. Comments are not exported;
+//! the `/* a / b */` tag lists in them become My Tags.
 
 use rbl_analysis::wave_creator::{WaveCreator, Waves};
 use rbl_anlz::{
@@ -11,10 +12,10 @@ use rbl_anlz::{
 };
 use rbl_audio::MonoStream;
 use rbl_core::musickey::{Key as MusicKey, Mode};
-use rbl_export::{ExportOptions, ExportRoot, SourcePlaylist, SourceTrack};
+use rbl_export::{ExportOptions, ExportRoot, SourceMyTag, SourcePlaylist, SourceTrack};
 use serde::Deserialize;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     error::Error,
     fs,
     path::{Path, PathBuf},
@@ -26,8 +27,7 @@ use std::{
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
 const SNAPSHOT_VERSION: u32 = 2;
-// export.pdb holds about 4 KB of strings per track; release notes in comments exceed it.
-const COMMENT_CHARS: usize = 1000;
+const MY_TAG_CATEGORY: &str = "Tags";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -139,7 +139,11 @@ fn beats(grid: &[(f64, i64)]) -> Result<Vec<Beat>> {
 }
 
 fn beat_at(beat: i64, tempo_x100: u16, time: f64) -> Result<Beat> {
-    Ok(Beat { beat_number: u16::try_from(beat.rem_euclid(4) + 1)?, tempo_x100, time_ms: ms(time)? })
+    Ok(Beat {
+        beat_number: u16::try_from(beat.rem_euclid(4) + 1)?,
+        tempo_x100,
+        time_ms: ms(time)?,
+    })
 }
 
 /// The device's hot cue colour code nearest to an RGB colour.
@@ -173,7 +177,10 @@ fn cues(track: &Track) -> Result<Vec<ExportCue>> {
         });
     }
     if let Some(position) = track.main_cue {
-        out.push(ExportCue { time_ms: ms(position)?, ..Default::default() });
+        out.push(ExportCue {
+            time_ms: ms(position)?,
+            ..Default::default()
+        });
     }
     for saved in track.loops.values() {
         out.push(ExportCue {
@@ -186,9 +193,52 @@ fn cues(track: &Track) -> Result<Vec<ExportCue>> {
     Ok(out)
 }
 
+/// The names in a comment's `/* a / b */` lists.
+fn comment_tags(comment: &str) -> impl Iterator<Item = &str> {
+    comment
+        .split("/*")
+        .skip(1)
+        .filter_map(|rest| rest.split_once("*/").map(|(list, _)| list))
+        .flat_map(|list| list.split('/'))
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+}
+
+/// One My Tag category holding every comment tag, with ids by name.
+fn my_tags<'a>(tracks: &'a [Track]) -> (Vec<SourceMyTag>, HashMap<&'a str, u64>) {
+    let names: BTreeSet<&str> = tracks
+        .iter()
+        .flat_map(|t| comment_tags(&t.info.comment))
+        .collect();
+    let mut rows = vec![SourceMyTag {
+        id: 1,
+        seq: 1,
+        name: MY_TAG_CATEGORY.into(),
+        attribute: 1,
+        parent: 0,
+    }];
+    let mut ids = HashMap::new();
+    for (seq, name) in (1..).zip(names) {
+        let id = u64::from(seq) + 1;
+        rows.push(SourceMyTag {
+            id,
+            seq,
+            name: name.into(),
+            attribute: 0,
+            parent: 1,
+        });
+        ids.insert(name, id);
+    }
+    (rows, ids)
+}
+
 fn key_name(key: &Key) -> String {
     let mode = if key.minor { Mode::Minor } else { Mode::Major };
-    MusicKey { pitch: key.tonic, mode }.name()
+    MusicKey {
+        pitch: key.tonic,
+        mode,
+    }
+    .name()
 }
 
 /// Waveforms for the audio at `path`, from the cache when the file is unchanged.
@@ -221,7 +271,15 @@ fn waves(path: &Path, cache: &Path) -> Result<Waves> {
 }
 
 fn wave_fields(waves: &Waves) -> [&Vec<u8>; 7] {
-    [&waves.pwav, &waves.pwv2, &waves.pwv3, &waves.pwv4, &waves.pwv5, &waves.pwv6, &waves.pwv7]
+    [
+        &waves.pwav,
+        &waves.pwv2,
+        &waves.pwv3,
+        &waves.pwv4,
+        &waves.pwv5,
+        &waves.pwv6,
+        &waves.pwv7,
+    ]
 }
 
 fn encode_waves(waves: &Waves) -> Vec<u8> {
@@ -251,16 +309,37 @@ fn decode_waves(bytes: &[u8]) -> Result<Waves> {
         let len = u32::from_le_bytes(take(4)?.try_into()?) as usize;
         Ok(take(len)?.to_vec())
     };
-    let [pwav, pwv2, pwv3, pwv4, pwv5, pwv6, pwv7] =
-        [field()?, field()?, field()?, field()?, field()?, field()?, field()?];
-    Ok(Waves { pwvc, pwv6, pwv7, pwv4, pwv5, pwv3, pwav, pwv2 })
+    let [pwav, pwv2, pwv3, pwv4, pwv5, pwv6, pwv7] = [
+        field()?,
+        field()?,
+        field()?,
+        field()?,
+        field()?,
+        field()?,
+        field()?,
+    ];
+    Ok(Waves {
+        pwvc,
+        pwv6,
+        pwv7,
+        pwv4,
+        pwv5,
+        pwv3,
+        pwav,
+        pwv2,
+    })
 }
 
-fn source_track(track: &Track, library: &Path, cache: &Path) -> Result<SourceTrack> {
+fn source_track(
+    track: &Track,
+    library: &Path,
+    cache: &Path,
+    tag_ids: &HashMap<&str, u64>,
+) -> Result<SourceTrack> {
     let source_path = library.join(&track.path);
     let grid = beats(&track.grid)?;
-    let waves = waves(&source_path, cache)
-        .map_err(|e| format!("{}: {e}", source_path.display()))?;
+    let waves =
+        waves(&source_path, cache).map_err(|e| format!("{}: {e}", source_path.display()))?;
     let analysis = author_with_rekordbox_waves(
         "",
         &grid,
@@ -284,7 +363,6 @@ fn source_track(track: &Track, library: &Path, cache: &Path) -> Result<SourceTra
         album: info.album.clone(),
         genre: info.genre.clone(),
         label: info.label.clone(),
-        comment: info.comment.chars().take(COMMENT_CHARS).collect(),
         year: info.year.unwrap_or(0),
         duration_sec: info.duration.unwrap_or(0),
         bitrate: info.bitrate.unwrap_or(0),
@@ -294,6 +372,11 @@ fn source_track(track: &Track, library: &Path, cache: &Path) -> Result<SourceTra
         bpm_x100: grid.first().map_or(0, |beat| u32::from(beat.tempo_x100)),
         artwork: info.artwork.as_ref().map(|art| library.join(art)),
         cues: Some(cues(track)?),
+        my_tags: comment_tags(&info.comment)
+            .map(|name| tag_ids[name])
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
         analysis: vec![
             ("DAT".into(), analysis.dat),
             ("EXT".into(), analysis.ext),
@@ -305,7 +388,10 @@ fn source_track(track: &Track, library: &Path, cache: &Path) -> Result<SourceTra
 }
 
 /// The playlist tree, depth first, with each list's tracks as indices into `tracks`.
-fn playlists(nodes: &[Playlist], index: &HashMap<(&str, u64), usize>) -> Result<Vec<SourcePlaylist>> {
+fn playlists(
+    nodes: &[Playlist],
+    index: &HashMap<(&str, u64), usize>,
+) -> Result<Vec<SourcePlaylist>> {
     fn add(
         node: &Playlist,
         parent_id: u64,
@@ -320,9 +406,12 @@ fn playlists(nodes: &[Playlist], index: &HashMap<(&str, u64), usize>) -> Result<
             .tracks
             .iter()
             .map(|(database, track)| {
-                index.get(&(database.as_str(), *track)).copied().ok_or_else(|| {
-                    format!("Playlist {:?} names an unknown track {track}", node.name).into()
-                })
+                index
+                    .get(&(database.as_str(), *track))
+                    .copied()
+                    .ok_or_else(|| {
+                        format!("Playlist {:?} names an unknown track {track}", node.name).into()
+                    })
             })
             .collect::<Result<Vec<_>>>()?;
         out.push(SourcePlaylist {
@@ -345,7 +434,12 @@ fn playlists(nodes: &[Playlist], index: &HashMap<(&str, u64), usize>) -> Result<
     Ok(out)
 }
 
-fn prepare(snapshot: &Snapshot, library: &Path, cache: &Path) -> Result<Vec<SourceTrack>> {
+fn prepare(
+    snapshot: &Snapshot,
+    library: &Path,
+    cache: &Path,
+    tag_ids: &HashMap<&str, u64>,
+) -> Result<Vec<SourceTrack>> {
     let queue = Mutex::new(snapshot.tracks.iter().enumerate());
     let done = Mutex::new(Vec::with_capacity(snapshot.tracks.len()));
     let workers = thread::available_parallelism().map_or(1, usize::from);
@@ -356,7 +450,7 @@ fn prepare(snapshot: &Snapshot, library: &Path, cache: &Path) -> Result<Vec<Sour
                     let Some((i, track)) = queue.lock().map_err(|e| e.to_string())?.next() else {
                         return Ok(());
                     };
-                    let prepared = source_track(track, library, cache);
+                    let prepared = source_track(track, library, cache, tag_ids);
                     done.lock().map_err(|e| e.to_string())?.push((i, prepared));
                 }
             });
@@ -384,9 +478,13 @@ fn run(snapshot: &Path, library: &Path, destination: &Path, cache: &Path) -> Res
         .map(|(i, t)| ((t.database.as_str(), t.track_id), i))
         .collect();
     let lists = playlists(&snapshot.playlists, &index)?;
-    let tracks = prepare(&snapshot, library, cache)?;
-    let options = ExportOptions { root: Some(ExportRoot::Standard), ..Default::default() };
-    rbl_export::export_with_options(destination, &tracks, &lists, &[], &options, &mut |_| {})?;
+    let (tags, tag_ids) = my_tags(&snapshot.tracks);
+    let tracks = prepare(&snapshot, library, cache, &tag_ids)?;
+    let options = ExportOptions {
+        root: Some(ExportRoot::Standard),
+        ..Default::default()
+    };
+    rbl_export::export_with_options(destination, &tracks, &lists, &tags, &options, &mut |_| {})?;
     let report = rbl_export::verify(destination)?;
     let entries: usize = lists.iter().map(|list| list.track_indices.len()).sum();
     if !report.is_ok()
@@ -405,6 +503,7 @@ fn run(snapshot: &Path, library: &Path, destination: &Path, cache: &Path) -> Res
             "memberships": entries,
             "hot_cues": report.hot_cues,
             "memory_cues": report.memory_cues,
+            "my_tags": tags.len() - 1,
         })
     );
     Ok(())
@@ -435,9 +534,18 @@ mod tests {
         let grid = beats(&[(-2.0, -4), (4.0, 8)]).unwrap();
         assert_eq!(grid.len(), 9);
         assert!(grid.iter().all(|b| b.tempo_x100 == 12_000));
-        assert_eq!(grid.first().map(|b| (b.time_ms, b.beat_number)), Some((0, 1)));
-        assert_eq!(grid.last().map(|b| (b.time_ms, b.beat_number)), Some((4000, 1)));
-        assert_eq!(grid.iter().map(|b| b.beat_number).collect::<Vec<_>>(), [1, 2, 3, 4, 1, 2, 3, 4, 1]);
+        assert_eq!(
+            grid.first().map(|b| (b.time_ms, b.beat_number)),
+            Some((0, 1))
+        );
+        assert_eq!(
+            grid.last().map(|b| (b.time_ms, b.beat_number)),
+            Some((4000, 1))
+        );
+        assert_eq!(
+            grid.iter().map(|b| b.beat_number).collect::<Vec<_>>(),
+            [1, 2, 3, 4, 1, 2, 3, 4, 1]
+        );
     }
 
     #[test]
@@ -448,13 +556,32 @@ mod tests {
 
     #[test]
     fn engine_cue_slots_map_to_pioneer_kinds() {
-        let mut track: Track = serde_json::from_str(include_str!("../../tests/fixtures/snapshot.json"))
-            .map(|s: Snapshot| s.tracks.into_iter().next().unwrap())
-            .unwrap();
-        track.hot_cues.insert(4, Cue { position: 1.0, label: "D".into(), color: [255, 0, 0] });
-        let kinds: Vec<_> = cues(&track).unwrap().iter().map(|c| (c.kind, c.loop_time_ms)).collect();
+        let mut track: Track =
+            serde_json::from_str(include_str!("../../tests/fixtures/snapshot.json"))
+                .map(|s: Snapshot| s.tracks.into_iter().next().unwrap())
+                .unwrap();
+        track.hot_cues.insert(
+            4,
+            Cue {
+                position: 1.0,
+                label: "D".into(),
+                color: [255, 0, 0],
+            },
+        );
+        let kinds: Vec<_> = cues(&track)
+            .unwrap()
+            .iter()
+            .map(|c| (c.kind, c.loop_time_ms))
+            .collect();
         assert_eq!(kinds, [(2, None), (5, None), (0, None), (0, Some(2000))]);
-        track.hot_cues.insert(9, Cue { position: 1.0, label: String::new(), color: [0, 0, 0] });
+        track.hot_cues.insert(
+            9,
+            Cue {
+                position: 1.0,
+                label: String::new(),
+                color: [0, 0, 0],
+            },
+        );
         assert!(cues(&track).is_err());
     }
 
@@ -484,12 +611,25 @@ mod tests {
     }
 
     #[test]
+    fn comment_tag_lists_become_my_tags_and_the_rest_is_dropped() {
+        let names: Vec<_> =
+            comment_tags("1A - Energy 6 /* Groove / Peak Time */ notes /* Dub */ /* open")
+                .collect();
+        assert_eq!(names, ["Groove", "Peak Time", "Dub"]);
+        assert_eq!(comment_tags("Visit https://x.bandcamp.com").count(), 0);
+    }
+
+    #[test]
     fn folders_cannot_hold_tracks() {
         let index = HashMap::from([(("a", 1), 0)]);
         let node = Playlist {
             name: "Mixed".into(),
             tracks: vec![("a".into(), 1)],
-            children: vec![Playlist { name: "Child".into(), tracks: vec![], children: vec![] }],
+            children: vec![Playlist {
+                name: "Child".into(),
+                tracks: vec![],
+                children: vec![],
+            }],
         };
         assert!(playlists(&[node], &index).is_err());
     }
