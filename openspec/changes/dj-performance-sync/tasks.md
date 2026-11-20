@@ -9,7 +9,7 @@
 
 ## 2. Engine USB in the package
 
-- [x] 2.1 `usb build`, `usb push` and `usb pull` commands from the spike; the delivered database is kept as the stick baseline
+- [x] 2.1 `usb build` and `usb push` commands from the spike, delivering to a stick root given per run
 - [x] 2.2 `services.traktor-m3u-sync.usb.<name>` build and push units in the module
 - [ ] 2.2a Wire the units in nix-homelab: build after Engine analysis, push on demand
 - [ ] 2.3 A playlist change reaches the stick from one trigger; a repeat push sends no audio
@@ -23,9 +23,9 @@
 
 ## 4. Engine read-back and write-back
 
-- [ ] 4.1 Read a delivered Engine stick into a snapshot
-- [ ] 4.2 Per-slot three-way diff with capability masks and approval token
-- [ ] 4.3 Approved write-back to Engine, replacing the spike's review
+- [x] 4.1 Read a delivered Engine stick into a snapshot
+- [x] 4.2 Per-field and per-slot diff of the stick against current Engine, with an approval code
+- [x] 4.3 Approved write-back to Engine through the Engine publication path, replacing the spike's review
 - [ ] 4.4 One real SC6000 session's edits are shown and applied exactly
 
 ## 5. Pioneer read-back

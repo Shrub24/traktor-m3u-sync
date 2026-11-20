@@ -241,23 +241,39 @@ def usb_push(
         typer.echo("Delivery complete. Stop the SFTP server, then eject the drive.")
 
 
-@usb_app.command(name="pull")
-def usb_pull(
+@usb_app.command(name="review")
+def usb_review(
     root: str = typer.Option(..., "--root", help="Stick root path on the SFTP server"),
+    approve: str | None = typer.Option(
+        None, "--approve", help="Approval code from a previous review; writes it into Engine"
+    ),
     config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
 ) -> None:
-    """Copy the stick's database for review and report whether it changed since delivery."""
+    """Show where the stick's key, grids, cues and loops differ from Engine, or apply them."""
 
-    def run() -> sftp.PullResult:
+    def run() -> usb.Review:
+        engine = load_engine_usb_config(config)
         device = load_usb_device_config(config)
         with sftp.session(device) as client:
             stick = sftp.enter_stick(client, root, mark=False)
-            return sftp.pull(client, sftp.StickState(device.state_dir, stick), usb.DATABASE)
+            state = sftp.StickState(device.state_dir, stick)
+            pulled = sftp.pull(client, state, usb.DATABASE)
+        if approve is None:
+            return usb.review(engine.library, pulled.snapshot)
+        result = usb.apply_review(engine.library, pulled.snapshot, approve)
+        state.accept(pulled.sha256)
+        return result
 
     result = _usb_step(run)
-    typer.echo(f"SNAPSHOT {result.snapshot}")
-    typer.echo(f"BASELINE {result.baseline or '-'}")
-    typer.echo(f"SUMMARY changed={str(result.changed).lower()}")
+    for change in result.changes:
+        slot = "" if change.slot is None else f" {change.slot}"
+        typer.echo(
+            f"{change.path}: {change.field}{slot} engine={change.current!r} stick={change.device!r}"
+        )
+    if approve is None:
+        typer.echo(f"SUMMARY changes={len(result.changes)} approval={result.approval}")
+    else:
+        typer.echo(f"SUMMARY changes_applied={len(result.changes)}")
 
 
 def _usb_step[T](step: Callable[[], T]) -> T:

@@ -11,12 +11,14 @@ import hashlib
 import sqlite3
 import struct
 import zlib
+from collections.abc import Sequence
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import UUID
 
 from ...model.performance import (
+    Change,
     Color,
     Cue,
     GridMarker,
@@ -311,3 +313,63 @@ def _track(
     else:
         raise EnginePerformanceError(f"Engine track {path!r} has partial performance data")
     return TrackPerformance(TrackRef(UUID(database), track_id), path, result)
+
+
+_PERFORMANCE = """
+SELECT t.id, t.key, p.beatData, p.quickCues, p.loops
+FROM Track t JOIN PerformanceData p ON p.trackId = t.id
+WHERE t.originDatabaseUuid = ? AND t.originTrackId = ?
+"""
+
+
+def apply_device_edits(
+    connection: sqlite3.Connection, device_database: Path, changes: Sequence[Change]
+) -> None:
+    """Write the device's value of each changed field into the library, natively.
+
+    Only the changed fields are taken from the device; everything else in each blob,
+    including fields the model ignores, keeps the library's bytes.
+    """
+    with closing(sqlite3.connect(device_database.as_uri() + "?mode=ro", uri=True)) as device:
+        for ref in dict.fromkeys(change.ref for change in changes):
+            fields = {(c.field, c.slot) for c in changes if c.ref == ref}
+            origin = (str(ref.database), ref.track_id)
+            track_id, key, beat, cues, loops = _native(connection, origin)
+            _, device_key, device_beat, device_cues, device_loops = _native(device, origin)
+            if ("key", None) in fields:
+                key = device_key
+            if ("grid", None) in fields:
+                beat = replace(
+                    beat, grid_set=device_beat.grid_set, adjusted_grid=device_beat.adjusted_grid
+                )
+            if ("main_cue", None) in fields:
+                cues = replace(
+                    cues,
+                    adjusted_main_cue=device_cues.adjusted_main_cue,
+                    main_cue_adjusted=device_cues.main_cue_adjusted,
+                )
+            hot = list(cues.cues)
+            saved = list(loops.loops)
+            for field, slot in fields:
+                if field == "hot_cues" and slot is not None:
+                    hot[slot - 1] = device_cues.cues[slot - 1]
+                elif field == "loops" and slot is not None:
+                    saved[slot - 1] = device_loops.loops[slot - 1]
+            cues = replace(cues, cues=tuple(hot))
+            loops = replace(loops, loops=tuple(saved))
+            connection.execute("UPDATE Track SET key = ? WHERE id = ?", (key, track_id))
+            connection.execute(
+                "UPDATE PerformanceData SET beatData = ?, quickCues = ?, loops = ?"
+                " WHERE trackId = ?",
+                (encode_beat_data(beat), encode_quick_cues(cues), encode_loops(loops), track_id),
+            )
+
+
+def _native(
+    connection: sqlite3.Connection, origin: tuple[str, int]
+) -> tuple[int, int | None, BeatData, QuickCues, Loops]:
+    row = connection.execute(_PERFORMANCE, origin).fetchone()
+    if row is None or None in row[2:]:
+        raise EnginePerformanceError(f"Track {origin} has no saved performance data")
+    track_id, key, beat, cues, loops = row
+    return track_id, key, decode_beat_data(beat), decode_quick_cues(cues), decode_loops(loops)

@@ -608,7 +608,7 @@ def test_backup_refreshes_to_prior_generation_each_run(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "seam",
-    ["_create_stage", "_rebuild_stage", "_validate_staged", "_refresh_backup", "_publish_stage"],
+    ["_create_stage", "_edit_stage", "_validate_staged", "_refresh_backup", "_publish_stage"],
 )
 def test_pre_publication_failure_leaves_target_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, seam: str
@@ -716,7 +716,7 @@ def test_keyboard_interrupt_cleans_stage_without_swallowing(
     engine = tmp_path / ENGINE_DB
     _engine_db(engine)
     before = engine.read_bytes()
-    monkeypatch.setattr(engine_writer, "_rebuild_stage", _interrupt)
+    monkeypatch.setattr(engine_writer, "_edit_stage", _interrupt)
 
     with pytest.raises(KeyboardInterrupt):
         write_database(engine, _playlists(), **ARGS)

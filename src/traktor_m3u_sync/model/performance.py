@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import UUID
 
 SNAPSHOT_VERSION = 1
@@ -83,6 +83,43 @@ class Snapshot:
     library: UUID
     sha256: str
     tracks: tuple[TrackPerformance, ...]
+
+
+type Field = Literal["key", "grid", "main_cue", "hot_cues", "loops"]
+
+
+@dataclass(frozen=True)
+class Change:
+    ref: TrackRef
+    path: str
+    field: Field
+    slot: int | None
+    current: object
+    device: object
+
+
+def diff(current: Snapshot, device: Snapshot) -> tuple[Change, ...]:
+    """Where a device's tracks differ from the current library; unknown tracks are skipped."""
+    library = {track.ref: track for track in current.tracks}
+    changes: list[Change] = []
+    for track in sorted(device.tracks, key=lambda t: t.ref):
+        known = library.get(track.ref)
+        if known is None:
+            continue
+        ours, theirs, path = known.performance, track.performance, known.path
+
+        def compare(field: Field, slot: int | None, a: object, b: object) -> None:
+            if a != b:
+                changes.append(Change(track.ref, path, field, slot, a, b))
+
+        compare("key", None, ours.key, theirs.key)
+        compare("grid", None, ours.grid, theirs.grid)
+        compare("main_cue", None, ours.main_cue, theirs.main_cue)
+        for slot in sorted(ours.hot_cues.keys() | theirs.hot_cues.keys()):
+            compare("hot_cues", slot, ours.hot_cues.get(slot), theirs.hot_cues.get(slot))
+        for slot in sorted(ours.loops.keys() | theirs.loops.keys()):
+            compare("loops", slot, ours.loops.get(slot), theirs.loops.get(slot))
+    return tuple(changes)
 
 
 def dumps(snapshot: Snapshot) -> str:

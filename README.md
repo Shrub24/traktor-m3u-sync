@@ -296,7 +296,7 @@ Run order: close Engine DJ (or stop the VM) → `export --format engine --dry-ru
 check matched tracks, playlists, memberships, and skips in the summary → open Engine DJ. Rollback is
 the operator's own step against the retained backup, taken while Engine stays offline.
 
-## Engine USB export (`usb build`, `usb push`, `usb pull`)
+## Engine USB export (`usb build`, `usb push`, `usb review`)
 
 These commands read only `[usb.engine]` and `[usb.device]`; they do not use the playlist store.
 
@@ -325,10 +325,13 @@ state_dir = "~/.local/state/playlist-sync/usb"
   last received, then installs the database, so an interrupted push leaves the previous library
   working and a retry resends nothing already complete. Delivery needs SFTP `posix-rename` with
   overwrite, which it checks first. It refuses a stick database that differs from the one it last
-  installed (after edits on the player, or on a stick another tool wrote) and keeps a copy;
-  `--reviewed <sha256>` allows replacing that exact database.
-- `usb pull --root <path>` copies the stick database into the state directory and reports
-  whether it changed since delivery.
+  installed (after edits on the player, or on a stick another tool wrote) and keeps a copy.
+  `--reviewed <sha256>` replaces that exact database, discarding its edits.
+- `usb review --root <path>` lists where the stick's key, beat grids, main cue, hot cues and
+  saved loops differ from Engine, per field and slot, with an approval code. With Engine closed,
+  `--approve <code>` writes the stick's value of each listed difference into Engine; it fails if
+  Engine or the stick changed since the review. Fields the comparison does not cover keep
+  Engine's bytes. The next push may then replace that stick database.
 
 A stick is identified by the UUID in `.playlist-sync-stick` at its root, written by its first
 push, so any number of sticks share one configuration. After a push, stop the SFTP server and

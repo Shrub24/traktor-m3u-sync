@@ -48,7 +48,7 @@ class PushResult:
 @dataclass(frozen=True)
 class PullResult:
     snapshot: Path
-    baseline: Path | None
+    sha256: str
     changed: bool
 
 
@@ -69,6 +69,14 @@ class StickState:
     def record(self, installed: Installed) -> None:
         data = {"database": installed.database, "files": dict(installed.files)}
         _write(self.path / "installed.json", json.dumps(data).encode())
+
+    def accept(self, sha256: str) -> None:
+        """Allow the next push to replace this stick database, whose edits were reviewed."""
+        _write(self.path / "reviewed", sha256.encode())
+
+    def accepted(self) -> str | None:
+        record = self.path / "reviewed"
+        return record.read_text() if record.is_file() else None
 
     def database(self, sha256: str) -> Path:
         return self.path / "databases" / f"{sha256}.db"
@@ -123,8 +131,7 @@ def enter_stick(sftp: SFTPClient, root: str, *, mark: bool) -> uuid.UUID:
 def pull(sftp: SFTPClient, state: StickState, activation: str) -> PullResult:
     digest, snapshot = state.keep(_read(sftp, activation))
     installed = state.installed()
-    baseline = None if installed is None else state.database(installed.database)
-    return PullResult(snapshot, baseline, installed is None or digest != installed.database)
+    return PullResult(snapshot, digest, installed is None or digest != installed.database)
 
 
 def push(
@@ -143,7 +150,7 @@ def push(
     if _mode(sftp, activation) is not None:
         digest, copy = state.keep(_read(sftp, activation))
         current = installed is not None and digest == installed.database
-        if not current and digest != reviewed:
+        if not current and digest not in (reviewed, state.accepted()):
             raise DeliveryError(
                 f"The stick database is not the one last installed; saved it to {copy}. "
                 "Review its edits before replacing it."

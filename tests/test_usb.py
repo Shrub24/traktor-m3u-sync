@@ -10,6 +10,7 @@ import subprocess
 import uuid
 from collections.abc import Iterator
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -18,6 +19,13 @@ from engine_blobs import REAL_BEAT_DATA, REAL_LOOPS, REAL_QUICK_CUES
 from paramiko import Channel, SFTPClient
 
 from traktor_m3u_sync.formats.engine import usb
+from traktor_m3u_sync.formats.engine.performance import (
+    QuickCue,
+    decode_beat_data,
+    decode_quick_cues,
+    encode_beat_data,
+    encode_quick_cues,
+)
 from traktor_m3u_sync.formats.engine.usb import DATABASE, EngineUsbError
 from traktor_m3u_sync.usb import generation
 from traktor_m3u_sync.usb.generation import Generation
@@ -269,7 +277,6 @@ def test_edited_stick_database_is_kept_until_reviewed(
     edited = (root / DATABASE).read_bytes()
     pulled = pull(sftp, state, DATABASE)
     assert pulled.changed and pulled.snapshot.read_bytes() == edited
-    assert pulled.baseline is not None and pulled.baseline.is_file()
 
     rebuilt = _build(library, tmp_path / "out")
     with pytest.raises(DeliveryError, match="not the one last installed"):
@@ -277,4 +284,69 @@ def test_edited_stick_database_is_kept_until_reviewed(
     assert (root / DATABASE).read_bytes() == edited
 
     push(sftp, rebuilt, state, apply=True, reviewed=hashlib.sha256(edited).hexdigest())
+    assert (root / DATABASE).read_bytes() == (rebuilt.tree / DATABASE).read_bytes()
+
+
+def _grids(database: Path) -> dict[int, bytes]:
+    rows = _rows(database, "SELECT trackId, beatData FROM PerformanceData")
+    return {cast(int, track): cast(bytes, blob) for track, blob in rows}
+
+
+def _edit_on_player(database: Path, track_id: int) -> None:
+    """A hot cue in slot 2 and the grid moved one second. The default main cue also moves, as
+    real Engine sticks show, though no reviewed field covers it."""
+    with closing(sqlite3.connect(database)) as db, db:
+        beat, cues = db.execute(
+            "SELECT beatData, quickCues FROM PerformanceData WHERE trackId = ?", (track_id,)
+        ).fetchone()
+        grid = decode_beat_data(beat)
+        moved = tuple(replace(m, sample=m.sample + grid.sample_rate) for m in grid.adjusted_grid)
+        hot = decode_quick_cues(cues)
+        slots = list(hot.cues)
+        slots[1] = QuickCue("Drop", 2 * grid.sample_rate, (255, 200, 30, 10))
+        db.execute(
+            "UPDATE PerformanceData SET beatData = ?, quickCues = ? WHERE trackId = ?",
+            (
+                encode_beat_data(replace(grid, adjusted_grid=moved)),
+                encode_quick_cues(replace(hot, cues=tuple(slots), default_main_cue=0.0)),
+                track_id,
+            ),
+        )
+
+
+def test_review_writes_player_edits_into_engine_and_releases_the_stick(
+    tmp_path: Path, stick: tuple[_Stick, Path]
+) -> None:
+    sftp, root = stick
+    library = Library(tmp_path)
+    edited, untouched = library.track("one.mp3", b"one"), library.track("two.mp3", b"two")
+    library.add(library.playlist("Sync"), edited, untouched)
+    state = _state(sftp, root, tmp_path)
+    push(sftp, _build(library, tmp_path / "out"), state, apply=True)
+    _edit_on_player(root / DATABASE, edited)
+    before = _grids(library.database)
+
+    pulled = pull(sftp, state, DATABASE)
+    pending = usb.review(library.path, pulled.snapshot)
+    assert [(c.ref.track_id, c.field, c.slot) for c in pending.changes] == [
+        (edited, "grid", None),
+        (edited, "hot_cues", 2),
+    ]
+    with pytest.raises(EngineUsbError, match="changed since the review"):
+        usb.apply_review(library.path, pulled.snapshot, "0" * 16)
+
+    usb.apply_review(library.path, pulled.snapshot, pending.approval)
+    state.accept(pulled.sha256)
+    assert usb.review(library.path, pulled.snapshot).changes == ()
+    after = _grids(library.database)
+    assert after[untouched] == before[untouched]
+    (cues,) = _rows(
+        library.database, f"SELECT quickCues FROM PerformanceData WHERE trackId = {edited}"
+    )
+    assert decode_quick_cues(cast(bytes, cues[0])).default_main_cue == (
+        decode_quick_cues(REAL_QUICK_CUES).default_main_cue
+    )
+
+    rebuilt = _build(library, tmp_path / "out")
+    push(sftp, rebuilt, state, apply=True)
     assert (root / DATABASE).read_bytes() == (rebuilt.tree / DATABASE).read_bytes()

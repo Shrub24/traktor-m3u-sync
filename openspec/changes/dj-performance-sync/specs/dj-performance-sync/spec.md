@@ -38,7 +38,7 @@ Decoding and re-encoding an Engine `beatData`, `quickCues` or `loops` blob SHALL
 
 ### Requirement: Deliver USB generations over SFTP
 
-`usb push` SHALL deliver to the stick root given for the run, over SFTP with a pinned host key, identifying the stick by the UUID in its marker and writing one on first delivery. It SHALL send only files whose content differs from what that stick last received. It SHALL install the library database after every other file and record the delivery only then. It SHALL refuse to replace a stick database that differs from the one last installed, unless that exact database was reviewed. `usb pull` SHALL copy the stick database for review and report whether it changed since delivery.
+`usb push` SHALL deliver to the stick root given for the run, over SFTP with a pinned host key, identifying the stick by the UUID in its marker and writing one on first delivery. It SHALL send only files whose content differs from what that stick last received. It SHALL install the library database after every other file and record the delivery only then. It SHALL refuse to replace a stick database that differs from the one last installed, unless that exact database was reviewed.
 
 #### Scenario: Repeat delivery
 - **WHEN** the same generation is pushed again
@@ -51,6 +51,18 @@ Decoding and re-encoding an Engine `beatData`, `quickCues` or `loops` blob SHALL
 #### Scenario: Player edits
 - **WHEN** the stick database was changed on the player
 - **THEN** push keeps it and fails until that database is reviewed
+
+### Requirement: Return player edits to Engine
+
+`usb review` SHALL list where the stick differs from current Engine, by key, beat grid, main cue and each hot cue and loop slot, with an approval code bound to both databases. Approving SHALL write the stick's value of exactly those fields into Engine, keep Engine's other bytes, and let the next push replace that stick database.
+
+#### Scenario: Hot cue added and grid moved on the player
+- **WHEN** a hot cue was set in one slot and the grid moved on one track
+- **THEN** the review lists exactly that slot and that grid, and approving it leaves other tracks and the unadjusted grid unchanged in Engine
+
+#### Scenario: Stale approval
+- **WHEN** Engine or the stick changed after the review
+- **THEN** approving fails and Engine is unchanged
 
 ### Requirement: Serialize performance snapshots
 

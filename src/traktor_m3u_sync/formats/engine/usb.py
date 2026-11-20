@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import fcntl
+import hashlib
 import json
 import re
 import shutil
@@ -19,9 +20,11 @@ from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from ...model.performance import Change, diff
 from ...usb import generation
 from ...usb.generation import Entry, Generation, HashCache
-from .writer import SCHEMA_VERSION, preflight_target
+from .performance import apply_device_edits, capture
+from .writer import SCHEMA_VERSION, preflight_target, publish
 
 LIBRARY = "Engine Library"
 DATABASE = f"{LIBRARY}/Database2/m.db"
@@ -190,3 +193,30 @@ def _device_uuid(path: Path) -> uuid.UUID:
     device = uuid.uuid4()
     path.write_text(json.dumps({"uuid": str(device)}))
     return device
+
+
+@dataclass(frozen=True)
+class Review:
+    changes: tuple[Change, ...]
+    approval: str
+
+
+def review(library: Path, device_database: Path) -> Review:
+    """Differences between a device's Engine database and the library, with the code that
+    approves exactly these two databases."""
+    current = capture(library / "Database2" / "m.db")
+    device = capture(device_database)
+    approval = hashlib.sha256(f"{current.sha256}:{device.sha256}".encode()).hexdigest()[:16]
+    return Review(diff(current, device), approval)
+
+
+def apply_review(library: Path, device_database: Path, approval: str) -> Review:
+    """Write the device's value of every reviewed difference into the library."""
+    result = review(library, device_database)
+    if result.approval != approval:
+        raise EngineUsbError("The library or the stick changed since the review; review again")
+    publish(
+        library / "Database2" / "m.db",
+        lambda connection: apply_device_edits(connection, device_database, result.changes),
+    )
+    return result

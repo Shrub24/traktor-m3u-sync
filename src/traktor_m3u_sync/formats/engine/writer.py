@@ -31,7 +31,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -81,22 +81,44 @@ def write_database(
     check_base_path: Path | None = None,
 ) -> WriteOutcome:
     """Rebuild one managed subtree and publish the result atomically, retaining a backup."""
-    database_path = Path(database_path)
+    artwork_dir = Path(database_path).parent.parent / "Artwork"
+
+    def write_thumbnails(outcome: WriteOutcome) -> None:
+        for name, thumbnail in outcome.thumbnails.items():
+            write_atomic(artwork_dir / name, thumbnail)
+
+    return publish(
+        Path(database_path),
+        lambda connection: rebuild_managed_subtree(
+            connection,
+            playlists,
+            managed_root=managed_root,
+            track_path_prefix=track_path_prefix,
+            check_base_path=check_base_path,
+            artwork_dir=artwork_dir,
+        ),
+        before_publish=write_thumbnails,
+    )
+
+
+def publish[T](
+    database_path: Path,
+    edit: Callable[[sqlite3.Connection], T],
+    *,
+    before_publish: Callable[[T], None] = lambda _: None,
+) -> T:
+    """Apply ``edit`` to a staged copy in one transaction and atomically publish it."""
     preflight_target(database_path)
     _validate_target(database_path)
 
     mode = os.stat(database_path).st_mode & 0o777
     backup_path = database_path.with_name(database_path.name + BACKUP_SUFFIX)
     stage = _create_stage(database_path, mode)
-    artwork_dir = database_path.parent.parent / "Artwork"
     published = False
     try:
-        outcome = _rebuild_stage(
-            stage, playlists, managed_root, track_path_prefix, check_base_path, artwork_dir
-        )
+        outcome = _edit_stage(stage, edit)
         _validate_staged(stage)
-        for name, thumbnail in outcome.thumbnails.items():
-            write_atomic(artwork_dir / name, thumbnail)
+        before_publish(outcome)
         _refresh_backup(database_path, backup_path, mode)
         _publish_stage(stage, database_path)
         published = True
@@ -148,26 +170,12 @@ def _create_stage(database_path: Path, mode: int) -> Path:
     return stage
 
 
-def _rebuild_stage(
-    stage: Path,
-    playlists: Sequence[Playlist],
-    managed_root: str,
-    track_path_prefix: str,
-    check_base_path: Path | None,
-    artwork_dir: Path,
-) -> WriteOutcome:
+def _edit_stage[T](stage: Path, edit: Callable[[sqlite3.Connection], T]) -> T:
     connection = _connect(stage)
     try:
         _validate_database(connection)
         connection.execute("BEGIN IMMEDIATE")
-        outcome = rebuild_managed_subtree(
-            connection,
-            playlists,
-            managed_root=managed_root,
-            track_path_prefix=track_path_prefix,
-            check_base_path=check_base_path,
-            artwork_dir=artwork_dir,
-        )
+        outcome = edit(connection)
         _validate_database(connection)
         connection.commit()
         return outcome

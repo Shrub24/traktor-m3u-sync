@@ -30,5 +30,5 @@ Capture rejects a database with active SQLite sidecars, reads the file once, and
 1. The Pioneer exporter writes Engine's main cue as a memory cue and saved loops as memory loops.
 2. Pioneer downbeats assume a beat index divisible by 4 starts a bar, until rekordbox desktop confirms it.
 3. Exporters carry Engine's saved grid unchanged, even where it disagrees with `bpmAnalyzed`. Pioneer BPM derives from the grid.
-4. Conflicting edits are blocked by default; a run may choose USB or source precedence explicitly.
+4. Read-back compares the stick with current Engine, not with what was delivered, and approved differences take the stick's value. Engine runs headless, so between a delivery and its read-back only the player changes performance data. Revisit with a second writer of performance data (another stick of the same tracks, or enrichment into Engine), where a delivered baseline would be needed to tell which side changed.
 5. Rust is limited to the rbxport helper, a separate flake package pinned to an upstream revision. The snapshot JSON is its input.
