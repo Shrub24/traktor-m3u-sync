@@ -163,6 +163,107 @@ let
     };
   };
 
+  usbModule = lib.types.submodule {
+    options = {
+      engine = {
+        library = lib.mkOption {
+          type = lib.types.str;
+          example = "/srv/music/Engine Library";
+          description = "Engine Library directory exported to the stick; read only while Engine is closed.";
+        };
+        output_dir = lib.mkOption {
+          type = lib.types.str;
+          example = "/var/lib/playlist-sync/usb/sc6000";
+          description = "Writable directory holding the staged USB generations and their manifests.";
+        };
+        playlist_root = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          example = "Playlist Sync";
+          description = "Top-level Engine playlist exported with its descendants; null exports every playlist.";
+        };
+      };
+
+      device = lib.mkOption {
+        default = null;
+        description = "SFTP target for delivery; null builds without a push unit.";
+        type = lib.types.nullOr (
+          lib.types.submodule {
+            options = {
+              host = lib.mkOption {
+                type = lib.types.str;
+                example = "192.168.0.203";
+              };
+              port = lib.mkOption {
+                type = lib.types.port;
+                default = 22;
+              };
+              user = lib.mkOption {
+                type = lib.types.str;
+                example = "me";
+              };
+              key_file = lib.mkOption {
+                type = lib.types.str;
+                example = "/var/lib/playlist-sync/.ssh/dj-usb";
+                description = "Private SSH key readable by the service user.";
+              };
+              known_hosts = lib.mkOption {
+                type = lib.types.str;
+                example = "/var/lib/playlist-sync/.ssh/dj-usb-known-hosts";
+                description = "known_hosts file pinning the device's host key.";
+              };
+              remote_root = lib.mkOption {
+                type = lib.types.str;
+                example = "/storage/15F4-0A58";
+                description = "USB root as seen over SFTP.";
+              };
+              stick = lib.mkOption {
+                type = lib.types.str;
+                example = "a895a763-930c-424a-96d7-c82333e69c9c";
+                description = "UUID stored in the stick's .playlist-sync-stick marker.";
+              };
+              state_dir = lib.mkOption {
+                type = lib.types.str;
+                example = "/var/lib/playlist-sync/usb-state";
+                description = "Writable directory for per-stick delivery records and database copies.";
+              };
+            };
+          }
+        );
+      };
+    };
+  };
+
+  usbExports = cfg.usb;
+  usbConfig =
+    name: usb:
+    toml.generate "traktor-m3u-sync-usb-${name}.toml" {
+      usb = {
+        engine = nonNull usb.engine;
+      }
+      // lib.optionalAttrs (usb.device != null) { device = usb.device; };
+    };
+  usbService =
+    action: args: name: usb:
+    lib.nameValuePair "traktor-m3u-sync-usb-${action}@${name}" {
+      description = "Playlist sync USB ${action} ${name}";
+      overrideStrategy = "asDropin";
+      serviceConfig.ExecStart = [
+        ""
+        (utils.escapeSystemdExecArgs (
+          [
+            (lib.getExe cfg.package)
+            "usb"
+            action
+            "--config"
+            (toString (usbConfig name usb))
+          ]
+          ++ args
+        ))
+      ];
+    };
+  usbPushExports = lib.filterAttrs (_: usb: usb.device != null) usbExports;
+
   jobs = cfg.jobs;
   jobNames = builtins.attrNames jobs;
   selectedFormatSettings =
@@ -436,6 +537,12 @@ in
       default = { };
       description = "Named independently triggerable import and export jobs.";
     };
+
+    usb = lib.mkOption {
+      type = lib.types.attrsOf usbModule;
+      default = { };
+      description = "Named USB exports: a build unit staging a verified generation and, with a device, a push unit delivering it.";
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -485,6 +592,14 @@ in
       // lib.optionalAttrs (lib.any (name: jobs.${name}.action == "export") jobNames) {
         "traktor-m3u-sync-export@" = templateService "export";
       }
-      // builtins.listToAttrs (lib.mapAttrsToList instanceService jobs);
+      // lib.optionalAttrs (usbExports != { }) {
+        "traktor-m3u-sync-usb-build@" = templateService "usb build";
+      }
+      // lib.optionalAttrs (usbPushExports != { }) {
+        "traktor-m3u-sync-usb-push@" = templateService "usb push";
+      }
+      // builtins.listToAttrs (lib.mapAttrsToList instanceService jobs)
+      // builtins.listToAttrs (lib.mapAttrsToList (usbService "build" [ ]) usbExports)
+      // builtins.listToAttrs (lib.mapAttrsToList (usbService "push" [ "--apply" ]) usbPushExports);
   };
 }

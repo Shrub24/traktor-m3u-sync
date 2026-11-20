@@ -24,6 +24,34 @@ Decoding and re-encoding an Engine `beatData`, `quickCues` or `loops` blob SHALL
 - **WHEN** a blob carries a default grid, main-cue flags or trailing bytes
 - **THEN** re-encoding it reproduces those bytes unchanged
 
+### Requirement: Build Engine USB generations
+
+`usb build` SHALL stage a standalone Engine library for the selected playlist tree from a closed Engine database, as a native clone with the source's track IDs and origins, a device UUID kept across builds, and media at content-addressed paths. It SHALL publish the generation with a manifest of every file only after the staged database passes integrity checks, keep the previous generation until then, and never modify the source.
+
+#### Scenario: Track without saved analysis
+- **WHEN** a selected track has no saved beat grid
+- **THEN** the build fails and the previously published generation stays current
+
+#### Scenario: Rebuild without changes
+- **WHEN** the library is rebuilt unchanged
+- **THEN** every file other than the database keeps its path and content hash
+
+### Requirement: Deliver USB generations over SFTP
+
+`usb push` SHALL connect with a pinned host key, verify the stick's marker, and send only files whose content differs from what that stick last received. It SHALL install the library database after every other file and record the delivery only then. It SHALL refuse to replace a stick database that differs from the one last installed, unless that exact database was reviewed. `usb pull` SHALL copy the stick database for review and report whether it changed since delivery.
+
+#### Scenario: Repeat delivery
+- **WHEN** the same generation is pushed again
+- **THEN** nothing is sent
+
+#### Scenario: Interrupted delivery
+- **WHEN** delivery stops before the database is installed
+- **THEN** the stick keeps its previous working library, and a retry sends only what is still missing
+
+#### Scenario: Player edits
+- **WHEN** the stick database was changed on the player
+- **THEN** push keeps it and fails until that database is reviewed
+
 ### Requirement: Serialize performance snapshots
 
 Snapshots SHALL serialize to versioned JSON and parse back to an equal snapshot. Parsing SHALL reject an unknown version or malformed content.

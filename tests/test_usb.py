@@ -1,0 +1,251 @@
+"""Engine USB build and SFTP delivery against the real Engine 3.0.2 schema and OpenSSH."""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import socket
+import sqlite3
+import subprocess
+import uuid
+from collections.abc import Iterator
+from contextlib import closing
+from pathlib import Path
+from typing import cast
+
+import pytest
+from engine_blobs import REAL_BEAT_DATA, REAL_LOOPS, REAL_QUICK_CUES
+from paramiko import Channel, SFTPClient
+
+from traktor_m3u_sync.formats.engine import usb
+from traktor_m3u_sync.formats.engine.usb import DATABASE, EngineUsbError
+from traktor_m3u_sync.usb import generation
+from traktor_m3u_sync.usb.generation import Generation
+from traktor_m3u_sync.usb.sftp import DeliveryError, StickState, pull, push
+
+SCHEMA = (Path(__file__).parent / "fixtures" / "engine_3_0_2_schema.sql").read_text()
+SOURCE = uuid.UUID("8ae3af13-4aae-44e6-91c2-8abc483ba2c9")
+STICK = uuid.UUID("a895a763-930c-424a-96d7-c82333e69c9c")
+
+
+class Library:
+    """A closed Engine media library with real schema and triggers, and audio beside it."""
+
+    def __init__(self, root: Path) -> None:
+        self.path = root / "Engine Library"
+        self.music = root / "library"
+        self.database = self.path / "Database2" / "m.db"
+        self.database.parent.mkdir(parents=True)
+        (self.path / "Artwork").mkdir()
+        self.music.mkdir()
+        with self.connect() as db:
+            db.executescript(SCHEMA)
+            db.execute(
+                "INSERT INTO Information (uuid, schemaVersionMajor, schemaVersionMinor,"
+                " schemaVersionPatch) VALUES (?, 3, 0, 2)",
+                (str(SOURCE),),
+            )
+
+    def connect(self) -> closing[sqlite3.Connection]:
+        connection = sqlite3.connect(self.database, isolation_level=None)
+        connection.execute("PRAGMA recursive_triggers = ON")
+        return closing(connection)
+
+    def track(self, name: str, audio: bytes, *, analyzed: bool = True) -> int:
+        (self.music / name).write_bytes(audio)
+        with self.connect() as db:
+            cursor = db.execute(
+                "INSERT INTO Track (path, filename, isAnalyzed) VALUES (?, ?, ?)",
+                (f"../library/{name}", name, int(analyzed)),
+            )
+            track_id = int(cursor.lastrowid or 0)
+            if analyzed:
+                db.execute(
+                    "UPDATE PerformanceData SET beatData = ?, quickCues = ?, loops = ?"
+                    " WHERE trackId = ?",
+                    (REAL_BEAT_DATA, REAL_QUICK_CUES, REAL_LOOPS, track_id),
+                )
+        overview = self.path / "Database2" / "OverviewData" / str(SOURCE) / f"{track_id}.rgb"
+        overview.parent.mkdir(parents=True, exist_ok=True)
+        overview.write_bytes(b"rgb" + audio)
+        return track_id
+
+    def playlist(self, title: str, parent: int = 0) -> int:
+        with self.connect() as db:
+            cursor = db.execute(
+                "INSERT INTO Playlist (title, parentListId, isPersisted, nextListId,"
+                " lastEditTime, isExplicitlyExported) VALUES (?, ?, 1, 0, '2026-01-01', 1)",
+                (title, parent),
+            )
+            return int(cursor.lastrowid or 0)
+
+    def add(self, playlist: int, *tracks: int) -> None:
+        with self.connect() as db:
+            for track in tracks:
+                db.execute(
+                    "INSERT INTO PlaylistEntity (listId, trackId, databaseUuid, nextEntityId,"
+                    " membershipReference) VALUES (?, ?, ?, 0, 0)",
+                    (playlist, track, str(SOURCE)),
+                )
+
+
+def _rows(database: Path, sql: str) -> list[tuple[object, ...]]:
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as db:
+        return db.execute(sql).fetchall()
+
+
+def _build(library: Library, output: Path, root: str | None = "Sync") -> Generation:
+    return usb.build(library.path, output, root).generation
+
+
+def test_build_exports_the_selected_tree_with_stable_device_and_media_paths(
+    tmp_path: Path,
+) -> None:
+    library = Library(tmp_path)
+    one = library.track("one.mp3", b"one")
+    two = library.track("two.mp3", b"two")
+    other = library.track("other.mp3", b"other")
+    root = library.playlist("Sync")
+    library.add(library.playlist("Set", root), two, one)
+    library.add(library.playlist("Elsewhere"), other)
+    before = library.database.read_bytes()
+
+    first = _build(library, tmp_path / "out")
+    staged = first.tree / DATABASE
+    assert [row[0] for row in _rows(staged, "SELECT title FROM Playlist ORDER BY id")] == [
+        "Sync",
+        "Set",
+    ]
+    tracks = {int(str(i)): str(path) for i, path in _rows(staged, "SELECT id, path FROM Track")}
+    assert set(tracks) == {one, two}
+    (device,) = _rows(staged, "SELECT uuid FROM Information")
+    assert uuid.UUID(str(device[0])) != SOURCE
+    assert _rows(staged, "SELECT DISTINCT originDatabaseUuid FROM Track") == [(str(SOURCE),)]
+    for track_id, path in tracks.items():
+        entry = first.files[f"Engine Library/{path}"]
+        assert entry.source == (library.music / ("one.mp3" if track_id == one else "two.mp3"))
+        assert not (first.tree / "Engine Library" / str(path)).exists()
+    assert library.database.read_bytes() == before
+
+    second = _build(library, tmp_path / "out")
+    assert generation.current(tmp_path / "out").path == second.path
+    assert _rows(second.tree / DATABASE, "SELECT uuid FROM Information") == [device]
+    assert {k: v.sha256 for k, v in second.files.items() if k != DATABASE} == {
+        k: v.sha256 for k, v in first.files.items() if k != DATABASE
+    }
+
+
+def test_failed_build_keeps_the_previous_generation(tmp_path: Path) -> None:
+    library = Library(tmp_path)
+    root = library.playlist("Sync")
+    library.add(root, library.track("one.mp3", b"one"))
+    published = _build(library, tmp_path / "out")
+    library.add(root, library.track("new.mp3", b"new", analyzed=False))
+    with pytest.raises(EngineUsbError, match="no saved beat grid"):
+        _build(library, tmp_path / "out")
+    assert generation.current(tmp_path / "out").path == published.path
+    assert [p.name for p in (tmp_path / "out" / "generations").iterdir()] == [published.path.name]
+
+
+class _Stick(SFTPClient):
+    """OpenSSH sftp-server on a socket pair, with an injectable failure on rename."""
+
+    fail_on: str | None = None
+
+    def posix_rename(self, oldpath: str | bytes, newpath: str | bytes) -> None:
+        if newpath == self.fail_on:
+            raise OSError("connection lost")
+        super().posix_rename(oldpath, newpath)
+
+
+class _Socket(socket.socket):
+    def get_name(self) -> str:
+        return "sftp test"
+
+
+@pytest.fixture
+def stick(tmp_path: Path) -> Iterator[tuple[_Stick, Path]]:
+    server_binary = os.environ.get("SFTP_SERVER")
+    assert server_binary, "SFTP_SERVER must name OpenSSH's sftp-server (set by the dev shell)"
+    root = tmp_path / "stick"
+    root.mkdir()
+    peer, server = socket.socketpair()
+    with (
+        _Socket(fileno=peer.detach()) as client,
+        server,
+        subprocess.Popen(
+            [server_binary, "-d", str(root)], stdin=server.fileno(), stdout=server.fileno()
+        ) as proc,
+    ):
+        server.close()
+        # paramiko only needs send/recv/close from its transport, which a socket provides.
+        with _Stick(cast(Channel, client)) as sftp:
+            yield sftp, root
+        client.close()
+        assert proc.wait(timeout=5) == 0
+
+
+def _state(tmp_path: Path) -> StickState:
+    state = StickState.__new__(StickState)
+    state.path = tmp_path / "state"
+    state.path.mkdir(exist_ok=True)
+    return state
+
+
+def test_push_is_incremental_and_database_last(tmp_path: Path, stick: tuple[_Stick, Path]) -> None:
+    sftp, root = stick
+    library = Library(tmp_path)
+    playlist = library.playlist("Sync")
+    library.add(playlist, library.track("one.mp3", b"one"))
+    state = _state(tmp_path)
+
+    built = _build(library, tmp_path / "out")
+    preview = push(sftp, built, state, apply=False)
+    assert DATABASE in preview.files and not (root / DATABASE).exists()
+    first = push(sftp, built, state, apply=True)
+    assert set(first.files) == set(built.files)
+    installed = (root / DATABASE).read_bytes()
+    assert installed == (built.tree / DATABASE).read_bytes()
+    assert push(sftp, built, state, apply=True).files == ()
+
+    new = library.track("new.mp3", b"new")
+    library.add(playlist, new)
+    updated = _build(library, tmp_path / "out")
+    media = next(k for k, v in updated.files.items() if v.source == library.music / "new.mp3")
+    sftp.fail_on = media
+    with pytest.raises(OSError, match="connection lost"):
+        push(sftp, updated, state, apply=True)
+    assert (root / DATABASE).read_bytes() == installed
+    assert not (root / media).exists()
+
+    sftp.fail_on = None
+    retry = push(sftp, updated, state, apply=True)
+    assert [k for k in retry.files if k.startswith("Engine Library/Music/")] == [media]
+    assert (root / media).read_bytes() == b"new"
+    assert (root / DATABASE).read_bytes() == (updated.tree / DATABASE).read_bytes()
+
+
+def test_edited_stick_database_is_kept_until_reviewed(
+    tmp_path: Path, stick: tuple[_Stick, Path]
+) -> None:
+    sftp, root = stick
+    library = Library(tmp_path)
+    library.add(library.playlist("Sync"), library.track("one.mp3", b"one"))
+    state = _state(tmp_path)
+    push(sftp, _build(library, tmp_path / "out"), state, apply=True)
+    assert pull(sftp, state, DATABASE).changed is False
+
+    with closing(sqlite3.connect(root / DATABASE)) as db, db:
+        db.execute("UPDATE PerformanceData SET quickCues = NULL")
+    edited = (root / DATABASE).read_bytes()
+    pulled = pull(sftp, state, DATABASE)
+    assert pulled.changed and pulled.snapshot.read_bytes() == edited
+    assert pulled.baseline is not None and pulled.baseline.is_file()
+
+    rebuilt = _build(library, tmp_path / "out")
+    with pytest.raises(DeliveryError, match="not the one last installed"):
+        push(sftp, rebuilt, state, apply=True)
+    assert (root / DATABASE).read_bytes() == edited
+
+    push(sftp, rebuilt, state, apply=True, reviewed=hashlib.sha256(edited).hexdigest())
+    assert (root / DATABASE).read_bytes() == (rebuilt.tree / DATABASE).read_bytes()

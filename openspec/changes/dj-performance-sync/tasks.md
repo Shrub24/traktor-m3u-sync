@@ -9,8 +9,9 @@
 
 ## 2. Engine USB in the package
 
-- [ ] 2.1 `usb build` and `usb push` commands from the spike, recording the delivered snapshot as the stick baseline
-- [ ] 2.2 Build and push units in nix-homelab
+- [x] 2.1 `usb build`, `usb push` and `usb pull` commands from the spike; the delivered database is kept as the stick baseline
+- [x] 2.2 `services.traktor-m3u-sync.usb.<name>` build and push units in the module
+- [ ] 2.2a Wire the units in nix-homelab: build after Engine analysis, push on demand
 - [ ] 2.3 A playlist change reaches the stick from one trigger; a repeat push sends no audio
 
 ## 3. Pioneer export

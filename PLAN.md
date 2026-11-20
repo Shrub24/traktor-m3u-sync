@@ -60,7 +60,8 @@ Sub-areas:
 - `sync-reporting` — JSON run reports (including on failure), store provenance, empty-import warning, `onFailure` fan-out, Engine `check_base_path`
 - `engine-analysis-lifecycle` — `engine-analysis` status command and `engine-analysis-guest` Windows task for unattended Engine analysis; awaiting a live headless check
 - `engine-track-insertion` — insert unknown tracks into Engine with tags, embedded art and artwork thumbnails; awaiting a live end-to-end check
-- `rekordbox-xml-export` — store-to-rekordbox XML exporter sharing iTunes' collection step and config shape; rekordbox USB export stays downstream
+- `rekordbox-xml-export` — store-to-rekordbox XML exporter sharing iTunes' collection step and config shape
+- `dj-performance-sync` — neutral performance model with a lossless Engine codec (done), Engine USB build and SFTP delivery with module units (done; homelab wiring pending), then Pioneer USB from Engine analysis, Engine/Pioneer player-edit read-back and approved write-back, and operator UX
 
 **Completed OpenSpec changes:**
 - `nix-job-orchestration` — named state domains and independently triggerable import/export jobs with validated success fan-out and shared systemd templates
@@ -91,8 +92,7 @@ These are explicitly out of scope until Phases 1–3 prove the core loop:
 - Cue point / analysis metadata in custom M3U tags
 - Watch mode (inotify / systemd path units)
 - Cross-platform import targets (macOS)
-- rekordbox USB export (`export.pdb`, OneLibrary, ANLZ analysis files); `rekordbox-xml-export` feeds rekordbox or external USB tools instead
-- Engine DJ expansion beyond `engine-export` v1: L: main-library mirroring, Engine import, and performance/metadata mutation
+- Engine DJ expansion beyond `engine-export` v1: L: main-library mirroring and metadata mutation (performance data write-back is in `dj-performance-sync`)
 
 ## Working assumptions
 

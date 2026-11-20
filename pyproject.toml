@@ -11,6 +11,7 @@ license = "GPL-3.0-or-later"
 requires-python = ">=3.14"
 dependencies = [
   "mutagen>=1.47.0",
+  "paramiko>=4.0.0",
   "pillow>=12.2.0",
   "traktor-nml-utils>=4.1.0",
   "typer>=0.16.0",
@@ -22,6 +23,7 @@ traktor-m3u-sync = "traktor_m3u_sync.cli:main"
 [dependency-groups]
 dev = [
   "pyright>=1.1.403",
+  "types-paramiko>=5.0.0",
   "pytest>=8.4.1",
   "ruff>=0.12.1",
 ]
@@ -36,7 +38,7 @@ typeCheckingMode = "strict"
 stubPath = "typings"
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "tests"]
 testpaths = ["tests"]
 
 [tool.ruff]

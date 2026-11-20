@@ -6,6 +6,7 @@ import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Final, cast
+from uuid import UUID
 
 from .paths.uri import FileUriError, FileUriMapping
 
@@ -74,16 +75,7 @@ class AppConfig:
 
 
 def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
-    expanded_path = path.expanduser()
-    if not expanded_path.is_file():
-        raise ConfigError(f"Config file not found: {expanded_path}")
-
-    try:
-        with expanded_path.open("rb") as handle:
-            raw = tomllib.load(handle)
-    except tomllib.TOMLDecodeError as exc:
-        raise ConfigError(f"Invalid TOML in {expanded_path}: {exc}") from exc
-
+    raw = _read_toml(path)
     store_table = _require_table(raw, "store")
     nml_table = _optional_table(raw, "nml")
     m3u_table = _optional_table(raw, "m3u")
@@ -121,6 +113,82 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
             check_base_path=_optional_path(engine_table, "check_base_path", "engine"),
         ),
     )
+
+
+@dataclass(frozen=True)
+class EngineUsbConfig:
+    library: Path
+    output_dir: Path
+    # Top-level Engine playlist to export with its descendants; None exports every playlist.
+    playlist_root: str | None = None
+
+
+@dataclass(frozen=True)
+class UsbDeviceConfig:
+    host: str
+    user: str
+    key_file: Path
+    known_hosts: Path
+    remote_root: str
+    stick: UUID
+    state_dir: Path
+    port: int = 22
+
+
+def load_engine_usb_config(path: Path) -> EngineUsbConfig:
+    table = _usb_table(path, "engine")
+    library = _optional_path(table, "library", "usb.engine")
+    output_dir = _optional_path(table, "output_dir", "usb.engine")
+    if library is None or output_dir is None:
+        raise ConfigError("[usb.engine] requires library and output_dir")
+    return EngineUsbConfig(
+        library, output_dir, _optional_string(table, "playlist_root", "usb.engine")
+    )
+
+
+def load_usb_device_config(path: Path) -> UsbDeviceConfig:
+    table = _usb_table(path, "device")
+    section = "usb.device"
+    values = {
+        key: _optional_string(table, key, section)
+        for key in ("host", "user", "key_file", "known_hosts", "remote_root", "stick", "state_dir")
+    }
+    missing = sorted(key for key, value in values.items() if value is None)
+    if missing:
+        raise ConfigError(f"[{section}] requires {', '.join(missing)}")
+    port = table.get("port", 22)
+    if isinstance(port, bool) or not isinstance(port, int) or not 0 < port < 65536:
+        raise ConfigError(f"Field 'port' in [{section}] must be a TCP port")
+    try:
+        stick = UUID(cast(str, values["stick"]))
+    except ValueError as exc:
+        raise ConfigError(f"Field 'stick' in [{section}] must be a UUID") from exc
+    return UsbDeviceConfig(
+        host=cast(str, values["host"]),
+        user=cast(str, values["user"]),
+        key_file=Path(cast(str, values["key_file"])).expanduser(),
+        known_hosts=Path(cast(str, values["known_hosts"])).expanduser(),
+        remote_root=cast(str, values["remote_root"]),
+        stick=stick,
+        state_dir=Path(cast(str, values["state_dir"])).expanduser(),
+        port=port,
+    )
+
+
+def _usb_table(path: Path, name: str) -> dict[str, Any]:
+    """USB commands read only their own [usb.<name>] table, not the playlist store config."""
+    return _require_table(_require_table(_read_toml(path), "usb"), name)
+
+
+def _read_toml(path: Path) -> dict[str, Any]:
+    expanded_path = path.expanduser()
+    if not expanded_path.is_file():
+        raise ConfigError(f"Config file not found: {expanded_path}")
+    try:
+        with expanded_path.open("rb") as handle:
+            return tomllib.load(handle)
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"Invalid TOML in {expanded_path}: {exc}") from exc
 
 
 def apply_import_overrides(

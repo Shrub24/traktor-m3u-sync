@@ -47,6 +47,7 @@
             dependencies = [
               traktor-nml-utils
               python.pkgs.mutagen
+              python.pkgs.paramiko
               python.pkgs.pillow
               python.pkgs.typer
             ];
@@ -145,6 +146,29 @@
                             reportFile = "/var/lib/playlist-sync/reports/last run.json";
                           };
                         };
+                        usb = {
+                          sc6000 = {
+                            engine = {
+                              library = "/mnt/engine/Engine Library";
+                              output_dir = "/var/lib/playlist-sync/usb/sc6000";
+                              playlist_root = "Playlist Sync";
+                            };
+                            device = {
+                              host = "192.168.0.203";
+                              port = 2222;
+                              user = "me";
+                              key_file = "/var/lib/playlist-sync/.ssh/dj-usb";
+                              known_hosts = "/var/lib/playlist-sync/.ssh/known_hosts";
+                              remote_root = "/storage/15F4-0A58";
+                              stick = "a895a763-930c-424a-96d7-c82333e69c9c";
+                              state_dir = "/var/lib/playlist-sync/usb-state";
+                            };
+                          };
+                          buildOnly.engine = {
+                            library = "/mnt/engine/Engine Library";
+                            output_dir = "/var/lib/playlist-sync/usb/build-only";
+                          };
+                        };
                       };
                     }
                   ];
@@ -158,6 +182,19 @@
                 engine = services."traktor-m3u-sync-export@engine";
                 external = services."traktor-m3u-sync-export@external";
                 reporting = services."traktor-m3u-sync-export@reporting";
+                usbBuild = services."traktor-m3u-sync-usb-build@sc6000";
+                usbPush = services."traktor-m3u-sync-usb-push@sc6000";
+                usbOk =
+                  builtins.match ".*\"usb\" \"build\" \"--config\" .*" (
+                    builtins.elemAt usbBuild.serviceConfig.ExecStart 1
+                  ) != null
+                  &&
+                    builtins.match ".*\"usb\" \"push\" \"--config\" .* \"--apply\"" (
+                      builtins.elemAt usbPush.serviceConfig.ExecStart 1
+                    ) != null
+                  && builtins.hasAttr "traktor-m3u-sync-usb-build@buildOnly" services
+                  && !(builtins.hasAttr "traktor-m3u-sync-usb-push@buildOnly" services)
+                  && services."traktor-m3u-sync-usb-push@".serviceConfig.User == "playlist-sync";
                 importTemplate = services."traktor-m3u-sync-import@";
                 exportTemplate = services."traktor-m3u-sync-export@";
                 legacyAbsent =
@@ -292,6 +329,22 @@
                 ${if fanOutOk then "" else "echo 'FAIL: OnSuccess/OnFailure fan-out'; exit 1"}
                 ${if execOk then "" else "echo 'FAIL: escaped job argv'; exit 1"}
                 ${if reportOk then "" else "echo 'FAIL: reportFile argv escaping'; exit 1"}
+                ${if usbOk then "" else "echo 'FAIL: USB build/push units'; exit 1"}
+
+                usb_config=$(echo '${builtins.elemAt usbPush.serviceConfig.ExecStart 1}' | sed 's/.*"--config" "\([^"]*\)".*/\1/')
+                for command in build push; do
+                  if traktor-m3u-sync usb "$command" --config "$usb_config" > loader.out 2>&1; then
+                    echo "FAIL: CLI unexpectedly completed USB $command fixture"
+                    exit 1
+                  fi
+                  case "$(< loader.out)" in
+                    *'ERROR code=config_error'*)
+                      echo "FAIL: packaged CLI rejected generated USB config for $command"
+                      cat loader.out
+                      exit 1
+                      ;;
+                  esac
+                done
 
                 for config_file in \
                   $(echo '${builtins.elemAt ingest.serviceConfig.ExecStart 1}' | sed 's/.*"--config" "\([^"]*\)".*/\1/') \
@@ -349,6 +402,8 @@
 
             env = {
               # UV_PYTHON = "${pkgs.python314}/bin/python3.14";
+              # USB delivery tests talk SFTP to a real OpenSSH server over a socket pair.
+              SFTP_SERVER = "${pkgs.openssh}/libexec/sftp-server";
             };
 
             shellHook = ''

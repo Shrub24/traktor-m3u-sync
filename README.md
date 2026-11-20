@@ -296,6 +296,44 @@ Run order: close Engine DJ (or stop the VM) → `export --format engine --dry-ru
 check matched tracks, playlists, memberships, and skips in the summary → open Engine DJ. Rollback is
 the operator's own step against the retained backup, taken while Engine stays offline.
 
+## Engine USB export (`usb build`, `usb push`, `usb pull`)
+
+These commands read only `[usb.engine]` and `[usb.device]`; they do not use the playlist store.
+
+```toml
+[usb.engine]
+library = "/srv/music/Engine Library"          # closed Engine library to export
+output_dir = "/var/lib/playlist-sync/usb/sc6000" # staged generations and their manifests
+playlist_root = "Playlist Sync"                  # optional; default exports every playlist
+
+[usb.device]                 # SFTP server on the device the stick is plugged into
+host = "192.168.0.203"
+port = 2222
+user = "me"
+key_file = "~/.ssh/dj-usb"
+known_hosts = "~/.ssh/dj-usb-known-hosts"     # pins the device's host key
+remote_root = "/storage/15F4-0A58"              # USB root as seen over SFTP
+stick = "a895a763-930c-424a-96d7-c82333e69c9c" # UUID in the stick's .playlist-sync-stick
+state_dir = "~/.local/state/playlist-sync/usb"
+```
+
+- `usb build` stages a standalone Engine library for the playlist tree as a native copy of
+  the source database, so its analysis is kept as Engine wrote it. Engine must be closed. The
+  stick keeps one device UUID across builds, and media sits at content-addressed paths, so
+  unchanged files keep their paths. Audio is not copied into the staged tree; delivery reads it
+  from the library. A failed build leaves the previous generation current.
+- `usb push` previews by default; `--apply` sends only files whose content differs from what
+  the stick last received, then installs the database. Interrupting it leaves the stick's
+  previous library working. Delivery needs SFTP `posix-rename` with overwrite, which it checks
+  first. It refuses a stick database that differs from the one last installed (for example,
+  after edits on the player) and keeps a copy; `--reviewed <sha256>` allows replacing that exact
+  database.
+- `usb pull` copies the stick database into the state directory and reports whether it changed
+  since delivery.
+
+Write a UUID to `.playlist-sync-stick` at the stick root once. After a push, stop the SFTP
+server and eject the stick on the device before unplugging it.
+
 ## Track identity
 
 - primary identity is the casefolded POSIX library-relative path

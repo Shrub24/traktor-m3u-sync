@@ -11,6 +11,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
+from engine_blobs import REAL_BEAT_DATA, REAL_LOOPS, REAL_QUICK_CUES
 
 from traktor_m3u_sync.formats.engine.performance import (
     EnginePerformanceError,
@@ -33,17 +34,6 @@ from traktor_m3u_sync.model.performance import (
     dumps,
     loads,
 )
-
-# Blobs written by Engine DJ 4 (home-forge media library).
-REAL_BEAT_DATA = bytes.fromhex(
-    "0000008a789c7378dad1c000048e991b6626006946060860924adcb93b6aed87037ffe43c0332688c4"
-    "7793590f4436653a3e82f2d100b9fa1818008abf297e"
-)
-REAL_QUICK_CUES = bytes.fromhex(
-    "00000081789c636000030e86fd1f181080761c871531c1aeca0d1f181daebe6002090000228212f0"
-)
-_EMPTY_LOOP = "00" + "000000000000f0bf" * 2 + "0000" + "00000000"
-REAL_LOOPS = bytes.fromhex("0800000000000000" + _EMPTY_LOOP * 8)
 
 LIBRARY = UUID("8ae3af13-4aae-44e6-91c2-8abc483ba2c9")
 RATE = 44100.0

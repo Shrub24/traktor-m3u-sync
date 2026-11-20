@@ -16,11 +16,15 @@ from .config import (
     apply_export_overrides,
     apply_import_overrides,
     load_config,
+    load_engine_usb_config,
+    load_usb_device_config,
 )
 from .contracts import AdapterWarning, SyncResult
+from .formats.engine import usb
 from .formats.engine.analysis import managed_analysis_saved
 from .reporting import utc_now, write_run_report
 from .services import run_export, run_import
+from .usb import generation, sftp
 
 app = typer.Typer(
     help="Sync playlists between Traktor NML and M3U through a rebuildable local store.",
@@ -186,6 +190,79 @@ def engine_analysis(
         typer.echo(f"ERROR code=engine_analysis_failed detail={exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(json.dumps({str(track_id): done for track_id, done in saved.items()}))
+
+
+usb_app = typer.Typer(help="Build USB library exports and deliver them to a stick over SFTP.")
+app.add_typer(usb_app, name="usb")
+
+
+@usb_app.command(name="build")
+def usb_build(config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config")) -> None:
+    """Stage a new Engine USB generation from the closed Engine library ([usb.engine])."""
+    result = _usb_step(lambda: usb.build(**vars(load_engine_usb_config(config))))
+    typer.echo(
+        f"SUMMARY generation={result.generation.path.name} playlists={result.playlists} "
+        f"memberships={result.memberships} tracks={result.tracks} device={result.device}"
+    )
+
+
+@usb_app.command(name="push")
+def usb_push(
+    config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
+    apply: bool = typer.Option(False, "--apply", help="Write to the stick; default previews"),
+    reviewed: str | None = typer.Option(
+        None, "--reviewed", help="SHA-256 of an edited stick database that was reviewed"
+    ),
+) -> None:
+    """Send the current Engine generation's changed files, then its database, to the stick."""
+
+    def run() -> sftp.PushResult:
+        engine = load_engine_usb_config(config)
+        device = load_usb_device_config(config)
+        with sftp.connect(device) as client:
+            return sftp.push(
+                client,
+                generation.current(engine.output_dir),
+                sftp.StickState(device),
+                apply=apply,
+                reviewed=reviewed,
+            )
+
+    result = _usb_step(run)
+    for name in result.files:
+        typer.echo(name)
+    typer.echo(
+        f"SUMMARY files={len(result.files)} bytes={result.bytes} "
+        f"applied={str(result.applied).lower()}"
+    )
+    if result.applied:
+        typer.echo("Delivery complete. Stop the SFTP server, then eject the drive.")
+
+
+@usb_app.command(name="pull")
+def usb_pull(config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config")) -> None:
+    """Copy the stick's library database for review; reports whether it changed since delivery."""
+
+    def run() -> sftp.PullResult:
+        device = load_usb_device_config(config)
+        with sftp.connect(device) as client:
+            return sftp.pull(client, sftp.StickState(device), usb.DATABASE)
+
+    result = _usb_step(run)
+    typer.echo(f"SNAPSHOT {result.snapshot}")
+    typer.echo(f"BASELINE {result.baseline or '-'}")
+    typer.echo(f"SUMMARY changed={str(result.changed).lower()}")
+
+
+def _usb_step[T](step: Callable[[], T]) -> T:
+    try:
+        return step()
+    except ConfigError as exc:
+        typer.echo(f"ERROR code=config_error detail={exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except Exception as exc:
+        typer.echo(f"ERROR code=usb_failed detail={exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
 
 def _run(
