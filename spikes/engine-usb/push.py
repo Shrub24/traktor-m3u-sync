@@ -12,6 +12,7 @@ from typing import BinaryIO
 from uuid import UUID
 
 from paramiko import SFTPClient, SSHClient
+from review import checksum, library_id, read_only
 
 MARKER = ".playlist-sync-stick"
 ENGINE_DATABASE = "Engine Library/Database2/m.db"
@@ -124,6 +125,38 @@ def check_sidecars(sftp: SFTPClient, activation: str) -> None:
             )
 
 
+def snapshot_database(sftp: SFTPClient, state: Path, activation: str) -> tuple[str, Path]:
+    check_sidecars(sftp, activation)
+    if not stat.S_ISREG(remote_mode(sftp, activation) or 0):
+        raise ValueError(f"Not a regular library file: {activation}")
+    with sftp.open(activation, "rb") as stream:
+        stream.prefetch(max_concurrent_requests=32)
+        data = stream.read()
+    key = hashlib.sha256(data).hexdigest()
+    snapshot = state / f"{key}.db"
+    save(snapshot, data)
+    return key, snapshot
+
+
+def inspect(sftp: SFTPClient, state: Path) -> None:
+    key, snapshot = snapshot_database(sftp, state, ENGINE_DATABASE)
+    print(f"USB snapshot: {snapshot}")
+    if (state / f"{key}.json").is_file():
+        print("USB database unchanged since delivery")
+        return
+    with read_only(snapshot) as device:
+        generation = library_id(device)
+    matches = []
+    for record in state.glob("*.json"):
+        baseline = record.with_suffix(".db")
+        with read_only(baseline) as db:
+            if library_id(db) == generation:
+                matches.append(baseline)
+    if len(matches) != 1:
+        raise ValueError("No unique delivered baseline for this USB generation")
+    print(f"Installed baseline: {matches[0]}")
+
+
 def push(
     sftp: SFTPClient,
     tree: Path,
@@ -132,22 +165,34 @@ def push(
     desired: dict[str, str],
     *,
     apply: bool,
+    reviewed: tuple[str, str] | None = None,
 ) -> None:
     current: dict[str, str] = {}
     installed = remote_mode(sftp, activation)
     check_sidecars(sftp, activation)
     if installed is not None:
-        if not stat.S_ISREG(installed):
-            raise ValueError(f"Not a regular library file: {activation}")
-        with sftp.open(activation, "rb") as stream:
-            stream.prefetch(max_concurrent_requests=32)
-            backup = stream.read()
-        key = hashlib.sha256(backup).hexdigest()
-        save(state / f"{key}.db", backup)
+        key, snapshot = snapshot_database(sftp, state, activation)
         record = state / f"{key}.json"
+        if reviewed is not None:
+            baseline, reviewed_hash = reviewed
+            if key != reviewed_hash:
+                raise ValueError("USB database changed since review; take a new snapshot")
+            baseline_db = state / f"{baseline}.db"
+            record = state / f"{baseline}.json"
+            if (
+                not record.is_file()
+                or not baseline_db.is_file()
+                or checksum(baseline_db) != baseline
+            ):
+                raise ValueError("Missing delivered baseline for this stick")
+            with read_only(snapshot) as device, read_only(baseline_db) as original:
+                if library_id(device) != library_id(original):
+                    raise ValueError("Reviewed baseline belongs to a different device generation")
         if not record.is_file():
-            raise ValueError(f"Unrecognized stick database; saved a copy to {state / f'{key}.db'}")
+            raise ValueError(f"Unrecognized stick database; saved a copy to {snapshot}")
         current = json.loads(record.read_text())
+    elif reviewed is not None:
+        raise ValueError("USB database disappeared since review")
 
     key = desired[activation]
     record = state / f"{key}.json"
@@ -184,17 +229,24 @@ def push(
         if remote_digest(sftp, temp) != key:
             raise OSError("Uploaded library hash mismatch")
         # Record before renaming: a lost acknowledgement is recoverable by reading the live DB.
+        baseline = (tree / activation).read_bytes()
+        if hashlib.sha256(baseline).hexdigest() != key:
+            raise ValueError("Staged database changed during delivery")
+        save(state / f"{key}.db", baseline)
         save(record, json.dumps(desired, sort_keys=True).encode())
         if installed is None:
             sftp.rename(temp, activation)
         else:
             sftp.posix_rename(temp, activation)
+    print(f"Installed baseline: {state / f'{key}.db'}")
     print("USB delivery complete. Stop SFTP and eject the drive on Android.")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("tree", type=Path, help="immutable staged USB export")
+    parser.add_argument(
+        "tree", type=Path, help="immutable staged USB export, or '-' to snapshot the stick database"
+    )
     parser.add_argument("host", help="phone address on the private network")
     parser.add_argument("stick", type=UUID, help=f"expected UUID in {MARKER} at the USB root")
     parser.add_argument("--port", type=int, default=2222)
@@ -207,11 +259,21 @@ def main() -> None:
     parser.add_argument(
         "--apply", action="store_true", help="write to the stick (default: preview)"
     )
+    parser.add_argument("--remote-root", default=".", help="USB root in the SFTP session")
+    parser.add_argument("--reviewed", help="replacement token from review.py")
     args = parser.parse_args()
-    tree = args.tree.resolve(strict=True)
-    if not tree.is_dir():
-        parser.error("tree must be a directory")
-    desired = manifest(tree, ENGINE_DATABASE)
+    reviewed = None
+    if args.reviewed is not None:
+        values = args.reviewed.split(":")
+        if len(values) != 2 or any(
+            len(v) != 64 or not set(v) <= set("0123456789abcdef") for v in values
+        ):
+            parser.error("Invalid USB replacement token")
+        reviewed = (values[0], values[1])
+    snapshot_only = args.tree == Path("-")
+    if snapshot_only and (args.apply or reviewed is not None):
+        parser.error("Snapshot mode does not accept --apply or --reviewed")
+    tree = args.tree if snapshot_only else args.tree.resolve(strict=True)
     state = args.state / str(args.stick)
     state.mkdir(mode=0o700, parents=True, exist_ok=True)
     with (state / "lock").open("a") as lock, SSHClient() as ssh:
@@ -230,10 +292,17 @@ def main() -> None:
         )
         with ssh.open_sftp() as sftp:
             sftp.get_channel().settimeout(60)
+            sftp.chdir(args.remote_root)
             with sftp.open(MARKER, "rb") as stream:
                 if stream.read(80).strip() != str(args.stick).encode():
                     raise ValueError("Wrong USB stick")
-            push(sftp, tree, state, ENGINE_DATABASE, desired, apply=args.apply)
+            if snapshot_only:
+                inspect(sftp, state)
+            else:
+                desired = manifest(tree, ENGINE_DATABASE)
+                push(
+                    sftp, tree, state, ENGINE_DATABASE, desired, apply=args.apply, reviewed=reviewed
+                )
 
 
 if __name__ == "__main__":

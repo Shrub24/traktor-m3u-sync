@@ -10,6 +10,8 @@ import uuid
 from contextlib import closing
 from pathlib import Path
 
+from review import checksum
+
 
 def select_tracks(db: sqlite3.Connection, root: str | None, source_uuid: str) -> None:
     if root is not None:
@@ -59,9 +61,13 @@ def copy_assets(
         if audio.stat().st_size >= 2**32:
             raise ValueError(f"Track exceeds the FAT32 file size limit: {audio}")
         filename = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", audio.name).rstrip(". ")
-        relative = Path("Music") / str(track_id) / f"{track_id}-{filename}"
+        directory = Path("Music") / str(track_id)
+        (target / directory).mkdir()
+        copied = target / directory / "audio.part"
+        shutil.copyfile(audio, copied)
+        relative = directory / checksum(copied) / f"{track_id}-{filename}"
         (target / relative).parent.mkdir()
-        shutil.copyfile(audio, target / relative)
+        copied.rename(target / relative)
         shutil.copyfile(
             source / overview / source_uuid / f"{track_id}.rgb",
             target / overview / device_uuid / f"{track_id}.rgb",

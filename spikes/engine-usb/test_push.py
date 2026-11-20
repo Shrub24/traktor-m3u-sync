@@ -8,7 +8,9 @@ import tempfile
 from pathlib import Path
 
 from paramiko import SFTPClient
-from push import ENGINE_DATABASE, manifest, push
+from push import ENGINE_DATABASE, inspect, manifest, push
+from review import checksum
+from test_review import DEVICE, execute, fixture
 
 
 class TestSocket(socket.socket):
@@ -43,8 +45,16 @@ def exercise(sftp: Client, root: Path, stick: Path) -> None:
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_bytes(content)
 
-    def sync(*, apply: bool = True) -> None:
-        push(sftp, tree, state, ENGINE_DATABASE, manifest(tree, ENGINE_DATABASE), apply=apply)
+    def sync(*, apply: bool = True, reviewed: tuple[str, str] | None = None) -> None:
+        push(
+            sftp,
+            tree,
+            state,
+            ENGINE_DATABASE,
+            manifest(tree, ENGINE_DATABASE),
+            apply=apply,
+            reviewed=reviewed,
+        )
 
     def fails(message: str) -> None:
         try:
@@ -83,6 +93,30 @@ def exercise(sftp: Client, root: Path, stick: Path) -> None:
     fails("Unrecognized stick database")
     assert b"player edits" in [path.read_bytes() for path in state.glob("*.db")]
     assert db.read_bytes() == b"player edits"
+
+    db.unlink()
+    put(asset, b"audio1")
+    state = root / "review-state"
+    state.mkdir()
+    staged = tree / ENGINE_DATABASE
+    staged.unlink()
+    fixture(staged, DEVICE, 21)
+    sync()
+    original = checksum(db)
+    execute(db, "UPDATE PerformanceData SET quickCues = NULL")
+    edited = checksum(db)
+    inspect(sftp, state)
+    assert (state / f"{edited}.db").read_bytes() == db.read_bytes()
+    execute(staged, "UPDATE Information SET uuid = '33333333-3333-4333-8333-333333333333'")
+    try:
+        sync(reviewed=(original, original))
+    except ValueError as exc:
+        assert "changed since review" in str(exc)
+    else:
+        raise AssertionError("Stale USB approval was accepted")
+    assert checksum(db) == edited
+    sync(reviewed=(original, edited))
+    assert db.read_bytes() == staged.read_bytes()
 
 
 if __name__ == "__main__":

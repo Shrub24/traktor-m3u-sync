@@ -5,4 +5,5 @@
 - [x] 3. Document the artifact and SC6000 acceptance procedure.
 - [ ] 4. Confirm on an SC6000 that the generated stick opens and plays with saved analysis.
 - [x] 5. Implement and exercise manual manifest-driven SFTP delivery against OpenSSH.
-- [ ] 6. Verify first install, refresh and interrupted-transfer recovery on sshd4a using OpenSSH.
+- [ ] 6. Trial first install, refresh and player-edit return on the 256 GB stick via sshd4a.
+- [x] 7. Verify reviewed Engine write-back and incremental delivery with SQLite and OpenSSH fixtures.

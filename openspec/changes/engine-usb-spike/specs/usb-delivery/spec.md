@@ -2,17 +2,32 @@
 
 ### Requirement: Deliver a staged USB generation over SFTP
 
-The manual delivery command SHALL select a stick by an operator-provisioned marker. It SHALL compare content manifests independently of timestamps, use a pinned SSH host key, and publish the activation file only after all required assets are present. It SHALL back up the current activation file before replacing it. It SHALL NOT delete media, replace assets referenced by the active generation, or overwrite an unrecognized database.
+Delivery SHALL check a stick marker, use a pinned SSH host key, and compare content manifests independently of timestamps. It SHALL back up the current database and publish the new database only after its assets are present. It SHALL NOT delete media or replace assets referenced by the installed generation.
 
 #### Scenario: Deliver a library update
-- **WHEN** the stick has a previously installed generation and the new export adds media
-- **THEN** unchanged media is not transferred, new assets arrive first, and the verified database is published last
+- **WHEN** a new export adds or changes media
+- **THEN** unchanged assets are skipped and new assets are installed before the database
 
-#### Scenario: A transfer is interrupted
-- **WHEN** delivery fails before publication
-- **THEN** the old database and the assets it references remain in place
-- **AND** retrying can recognize assets completed during the interrupted attempt
+#### Scenario: Interrupted transfer
+- **WHEN** transfer fails before database publication
+- **THEN** the installed database and its assets remain intact
 
-#### Scenario: Player edits exist
-- **WHEN** the database does not match a recorded delivery for that stick
-- **THEN** delivery retains a local copy and stops without replacing the database
+#### Scenario: Unrecognized database
+- **WHEN** a device database differs from a recorded delivery
+- **THEN** delivery saves a local copy and refuses replacement unless the operator explicitly approves that exact snapshot against its installed baseline
+
+### Requirement: Review and bring back Engine player edits
+
+Review SHALL compare each matching track's cue, loop and adjusted grid data against the exported baseline and the current Engine library. It SHALL match source identity by origin database UUID and track ID. Write-back SHALL require explicit approval of the reviewed changes, preserve unrelated fields, and back up the source before publication. Engine SHALL be closed during write-back.
+
+#### Scenario: Independent edits
+- **WHEN** the player and source edit different performance fields
+- **THEN** applying the reviewed changes brings back only the player-edited fields
+
+#### Scenario: Conflicting edits
+- **WHEN** both sides changed the same performance field differently
+- **THEN** review reports a conflict and applying leaves the source value alone unless USB precedence was explicitly selected during review
+
+#### Scenario: Source changes after review
+- **WHEN** the proposed changes no longer match the approved review
+- **THEN** write-back refuses publication
