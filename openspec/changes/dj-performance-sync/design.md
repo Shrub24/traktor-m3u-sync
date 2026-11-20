@@ -25,6 +25,19 @@ Mapping to the model: the adjusted grid, the adjusted main cue (negative means n
 
 Capture rejects a database with active SQLite sidecars, reads the file once, and hashes and parses those same bytes, so the snapshot always matches its recorded hash.
 
+## USB publication
+
+Both formats share one source, playlist selection, output root and SFTP destination. `[usb].formats`
+defaults to both; repeatable `--format` narrows the run. Generations and stick delivery records
+are independent by format. Pioneer uses rbxport's incremental working tree and stages its audio
+by hardlink: rbxport publishes new audio by rename, leaving previous generation inodes intact.
+
+Engine replaces one database atomically. Pioneer uploads assets first, then replaces
+`exportExt.pdb`, `export.pdb` and `exportLibrary.db` individually. A host-side pending record
+recognizes files from an interrupted database switch on retry; it is not a transaction across
+the group. Replacing a changed ANLZ file checks for edits to that file first. An interruption
+can leave mixed assets or databases; finish a retry before using the stick.
+
 ## Rulings
 
 1. The Pioneer exporter writes Engine's main cue as a memory cue and saved loops as memory loops.

@@ -106,7 +106,7 @@ def _stage(
             " (SELECT count(*) FROM Track)"
         ).fetchone()
     files[DATABASE] = Entry(generation.file_sha256(staged_db), staged_db.stat().st_size)
-    published = generation.publish(path, files, DATABASE)
+    published = generation.publish(path, files, (DATABASE,))
     return BuildResult(published, device, playlists, memberships, tracks)
 
 

@@ -52,6 +52,7 @@
               python.pkgs.pillow
               python.pkgs.typer
             ];
+            makeWrapperArgs = [ "--prefix PATH : ${pkgs.lib.makeBinPath [ pioneer-usb ]}" ];
             doCheck = false;
             meta = {
               description = "Traktor NML to M3U playlist sync tool";
@@ -150,11 +151,9 @@
                         };
                         usb = {
                           sc6000 = {
-                            engine = {
-                              library = "/mnt/engine/Engine Library";
-                              output_dir = "/var/lib/playlist-sync/usb/sc6000";
-                              playlist_root = "Playlist Sync";
-                            };
+                            library = "/mnt/engine/Engine Library";
+                            output_dir = "/var/lib/playlist-sync/usb/sc6000";
+                            playlist_root = "Playlist Sync";
                             device = {
                               host = "192.168.0.203";
                               port = 2222;
@@ -164,7 +163,7 @@
                               state_dir = "/var/lib/playlist-sync/usb-state";
                             };
                           };
-                          buildOnly.engine = {
+                          buildOnly = {
                             library = "/mnt/engine/Engine Library";
                             output_dir = "/var/lib/playlist-sync/usb/build-only";
                           };

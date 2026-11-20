@@ -165,23 +165,34 @@ let
 
   usbModule = lib.types.submodule {
     options = {
-      engine = {
-        library = lib.mkOption {
-          type = lib.types.str;
-          example = "/srv/music/Engine Library";
-          description = "Engine Library directory exported to the stick; read only while Engine is closed.";
-        };
-        output_dir = lib.mkOption {
-          type = lib.types.str;
-          example = "/var/lib/playlist-sync/usb/sc6000";
-          description = "Writable directory holding the staged USB generations and their manifests.";
-        };
-        playlist_root = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
-          example = "Playlist Sync";
-          description = "Top-level Engine playlist exported with its descendants; null exports every playlist.";
-        };
+      library = lib.mkOption {
+        type = lib.types.str;
+        example = "/srv/music/Engine Library";
+        description = "Engine Library directory exported to the stick; read only while Engine is closed.";
+      };
+      output_dir = lib.mkOption {
+        type = lib.types.str;
+        example = "/var/lib/playlist-sync/usb";
+        description = "Writable directory holding each format's USB generations and manifests.";
+      };
+      playlist_root = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "Playlist Sync";
+        description = "Top-level Engine playlist exported with its descendants; null exports every playlist.";
+      };
+      formats = lib.mkOption {
+        type = lib.types.nonEmptyListOf (
+          lib.types.enum [
+            "engine"
+            "pioneer"
+          ]
+        );
+        default = [
+          "engine"
+          "pioneer"
+        ];
+        description = "USB libraries built and delivered to the stick.";
       };
 
       device = lib.mkOption {
@@ -228,10 +239,7 @@ let
   usbConfig =
     name: usb:
     toml.generate "traktor-m3u-sync-usb-${name}.toml" {
-      usb = {
-        engine = nonNull usb.engine;
-      }
-      // lib.optionalAttrs (usb.device != null) { device = usb.device; };
+      usb = nonNull usb;
     };
   usbBuildService =
     name: usb:

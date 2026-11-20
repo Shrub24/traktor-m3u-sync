@@ -17,7 +17,7 @@ from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, cast
+from typing import cast
 
 from paramiko import SFTPClient, SSHClient
 
@@ -30,12 +30,6 @@ _CHUNK = 1024 * 1024
 
 class DeliveryError(RuntimeError):
     """Raised when delivery must stop without replacing the stick's library."""
-
-
-@dataclass(frozen=True)
-class Installed:
-    database: str
-    files: Mapping[str, str]
 
 
 @dataclass(frozen=True)
@@ -55,20 +49,20 @@ class PullResult:
 class StickState:
     """What was installed on one stick, plus every database delivered to or pulled from it."""
 
-    def __init__(self, state_dir: Path, stick: uuid.UUID) -> None:
+    def __init__(self, state_dir: Path, stick: uuid.UUID, format: str = "engine") -> None:
         self.path = state_dir / str(stick)
+        if format != "engine":
+            self.path /= format
         self.path.mkdir(mode=0o700, parents=True, exist_ok=True)
 
-    def installed(self) -> Installed | None:
-        record = self.path / "installed.json"
-        if not record.is_file():
-            return None
-        raw = cast(dict[str, Any], json.loads(record.read_text()))
-        return Installed(str(raw["database"]), cast(dict[str, str], raw["files"]))
+    def hashes(self, record: str) -> dict[str, str]:
+        path = self.path / record
+        if not path.is_file():
+            return {}
+        return cast(dict[str, str], json.loads(path.read_text())["files"])
 
-    def record(self, installed: Installed) -> None:
-        data = {"database": installed.database, "files": dict(installed.files)}
-        _write(self.path / "installed.json", json.dumps(data).encode())
+    def record(self, record: str, files: Mapping[str, str | tuple[str | None, str]]) -> None:
+        _write(self.path / record, json.dumps({"files": dict(files)}).encode())
 
     def accept(self, sha256: str) -> None:
         """Allow the next push to replace this stick database, whose edits were reviewed."""
@@ -130,8 +124,7 @@ def enter_stick(sftp: SFTPClient, root: str, *, mark: bool) -> uuid.UUID:
 
 def pull(sftp: SFTPClient, state: StickState, activation: str) -> PullResult:
     digest, snapshot = state.keep(_read(sftp, activation))
-    installed = state.installed()
-    return PullResult(snapshot, digest, installed is None or digest != installed.database)
+    return PullResult(snapshot, digest, digest != state.hashes("installed.json").get(activation))
 
 
 def push(
@@ -144,45 +137,75 @@ def push(
 ) -> PushResult:
     """``reviewed`` is the SHA-256 of a stick database that may be replaced although it is
     not the one this tool installed."""
-    activation = generation.activation
-    installed = state.installed()
-    current = False
-    if _mode(sftp, activation) is not None:
-        digest, copy = state.keep(_read(sftp, activation))
-        current = installed is not None and digest == installed.database
-        if not current and digest not in (reviewed, state.accepted()):
-            raise DeliveryError(
-                f"The stick database is not the one last installed; saved it to {copy}. "
-                "Review its edits before replacing it."
-            )
-
-    previous: Mapping[str, str] = {} if installed is None else installed.files
+    previous = state.hashes("installed.json")
+    pending_file = state.path / "pending.json"
+    pending = (
+        cast(dict[str, list[str | None]], json.loads(pending_file.read_text())["files"])
+        if pending_file.is_file()
+        else {}
+    )
     desired = {name: entry.sha256 for name, entry in generation.files.items()}
-    changes = sorted(name for name, sha in desired.items() if previous.get(name) != sha)
-    if not current and activation not in changes:
-        changes.append(activation)
+    assets = sorted(
+        name
+        for name in desired
+        if name not in generation.activation
+        and (previous.get(name) != desired[name] or name in pending)
+    )
+    databases: list[str] = []
+    switching: dict[str, tuple[str | None, str]] = {}
+    for name in generation.activation:
+        digest = None
+        if _mode(sftp, name) is not None:
+            digest, copy = state.keep(_read(sftp, name))
+            known = (previous.get(name), *pending.get(name, ()))
+            if len(generation.activation) == 1:
+                known += (reviewed, state.accepted())
+            if digest not in known:
+                raise DeliveryError(
+                    f"The stick database {name} is not the one last installed; saved it to {copy}. "
+                    "Review its edits before replacing it."
+                )
+        if digest != desired[name]:
+            databases.append(name)
+        switching[name] = (digest, desired[name])
+
+    for name in tuple(assets):
+        if not name.startswith("PIONEER/USBANLZ/"):
+            switching[name] = (previous.get(name), desired[name])
+            continue
+        digest = (
+            None if _mode(sftp, name) is None else hashlib.sha256(_read(sftp, name)).hexdigest()
+        )
+        if digest not in (None, previous.get(name), desired[name], *pending.get(name, ())):
+            raise DeliveryError(f"Pioneer analysis has changed on the stick: {name}")
+        if digest == desired[name]:
+            assets.remove(name)
+        switching[name] = (digest, desired[name])
+
+    changes = (*assets, *databases)
     size = sum(generation.files[name].size for name in changes)
-    if not apply or not changes:
-        return PushResult(tuple(changes), size, applied=False)
+    if not apply:
+        return PushResult(changes, size, applied=False)
+    if changes:
+        made: set[str] = set()
+        _check_replace(sftp, generation.activation[0], made)
+        # SFTP renames are atomic individually, not as a group.
+        state.record("pending.json", switching)
+        for name in assets:
+            entry = generation.files[name]
+            _make_dirs(sftp, PurePosixPath(name), made)
+            # Engine media is content-addressed and appears only after a complete upload.
+            if entry.source is not None and _mode(sftp, name) is not None:
+                continue
+            _upload(sftp, generation.local(name), name, entry.sha256)
 
-    made: set[str] = set()
-    _check_replace(sftp, activation, made)
-    for name in changes:
-        if name == activation:
-            continue
-        entry = generation.files[name]
-        _make_dirs(sftp, PurePosixPath(name), made)
-        # Media paths are content-addressed and created only by rename, so a present
-        # file is a complete upload from an interrupted push.
-        if entry.source is not None and _mode(sftp, name) is not None:
-            continue
-        _upload(sftp, generation.local(name), name, entry.sha256)
-
-    database = generation.local(activation)
-    state.keep(database.read_bytes())
-    _upload(sftp, database, activation, desired[activation])
-    state.record(Installed(desired[activation], desired))
-    return PushResult(tuple(changes), size, applied=True)
+        for name in databases:
+            database = generation.local(name)
+            state.keep(database.read_bytes())
+            _upload(sftp, database, name, desired[name])
+    state.record("installed.json", desired)
+    (state.path / "pending.json").unlink(missing_ok=True)
+    return PushResult(changes, size, applied=bool(changes))
 
 
 def _upload(sftp: SFTPClient, source: Path, name: str, sha256: str) -> None:

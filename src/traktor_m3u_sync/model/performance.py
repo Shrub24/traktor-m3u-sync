@@ -110,10 +110,10 @@ class Snapshot:
     playlists: tuple[PlaylistNode, ...] = ()
 
 
-def select(snapshot: Snapshot, root: str) -> Snapshot:
-    """The top-level playlist ``root`` with its descendants, and only the tracks they hold."""
-    nodes = [node for node in snapshot.playlists if node.name == root]
-    if len(nodes) != 1:
+def select(snapshot: Snapshot, root: str | None) -> Snapshot:
+    """Select one top-level playlist or all playlists, and only the tracks they hold."""
+    nodes = [node for node in snapshot.playlists if root is None or node.name == root]
+    if root is not None and len(nodes) != 1:
         raise SnapshotError(f"Expected one top-level playlist named {root!r}")
     refs: set[TrackRef] = set()
     pending = list(nodes)

@@ -296,15 +296,16 @@ Run order: close Engine DJ (or stop the VM) → `export --format engine --dry-ru
 check matched tracks, playlists, memberships, and skips in the summary → open Engine DJ. Rollback is
 the operator's own step against the retained backup, taken while Engine stays offline.
 
-## Engine USB export (`usb build`, `usb push`, `usb review`)
+## DJ USB export (`usb build`, `usb push`, `usb review`)
 
-These commands read only `[usb.engine]` and `[usb.device]`; they do not use the playlist store.
+These commands read `[usb]` and `[usb.device]`, not the playlist store.
 
 ```toml
-[usb.engine]
-library = "/srv/music/Engine Library"          # closed Engine library to export
-output_dir = "/var/lib/playlist-sync/usb/sc6000" # staged generations and their manifests
-playlist_root = "Playlist Sync"                  # optional; default exports every playlist
+[usb]
+library = "/srv/music/Engine Library"
+output_dir = "/var/lib/playlist-sync/usb" # contains engine/ and pioneer/
+playlist_root = "Playlist Sync"           # optional; defaults to every playlist
+formats = ["engine", "pioneer"]          # default; omit either to disable it
 
 [usb.device]                 # SFTP server on the device the stick is plugged into
 host = "192.168.0.203"
@@ -315,18 +316,20 @@ known_hosts = "~/.ssh/dj-usb-known-hosts"     # pins the device's host key
 state_dir = "~/.local/state/playlist-sync/usb"
 ```
 
-- `usb build` stages a standalone Engine library for the playlist tree as a native copy of
-  the source database, so its analysis is kept as Engine wrote it. Engine must be closed. Every
-  build of one output keeps the same Engine drive UUID, and media sits at content-addressed
-  paths, so unchanged files keep their paths. Audio is read from the library at delivery rather
-  than staged. A failed build leaves the previous generation current.
-- `usb push --root <path>` delivers to the stick mounted at that path on the SFTP server. It
-  previews by default; `--apply` sends only files whose content differs from what that stick
-  last received, then installs the database, so an interrupted push leaves the previous library
-  working and a retry resends nothing already complete. Delivery needs SFTP `posix-rename` with
-  overwrite, which it checks first. It refuses a stick database that differs from the one it last
-  installed (after edits on the player, or on a stick another tool wrote) and keeps a copy.
-  `--reviewed <sha256>` replaces that exact database, discarding its edits.
+- `usb build` builds every configured format from the closed Engine library. Repeat
+  `--format engine` or `--format pioneer` to select formats for either build or push.
+  Engine keeps its native analysis, a stable drive UUID and content-addressed media paths.
+  Pioneer builds both Device Library and OneLibrary, with its own audio copy in `Contents/`.
+  A failed build leaves the previous generation for that format current.
+- `usb push --root <path>` delivers the selected formats to the **same stick**. It previews
+  by default; `--apply` copies changed files, then installs each format's databases.
+  It requires SFTP `posix-rename` with overwrite. A database the tool did not install is
+  backed up and blocks replacement; `--reviewed <sha256>` permits replacing that exact
+  Engine database only. Back up and move any existing Pioneer library off the stick before
+  adopting it.
+- Pioneer analysis and database files cannot be switched as a group. If delivery is
+  interrupted, retry before using the stick. An edited analysis file blocks an upload that
+  would replace it; there is no Pioneer read-back yet.
 - `usb review --root <path>` lists where the stick's key, beat grids, main cue, hot cues and
   saved loops differ from Engine, per field and slot, with an approval code. With Engine closed,
   `--approve <code>` writes the stick's value of each listed difference into Engine; it fails if

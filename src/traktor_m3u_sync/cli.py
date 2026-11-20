@@ -16,7 +16,7 @@ from .config import (
     apply_export_overrides,
     apply_import_overrides,
     load_config,
-    load_engine_usb_config,
+    load_usb_config,
     load_usb_device_config,
 )
 from .contracts import AdapterWarning, SyncResult
@@ -24,7 +24,7 @@ from .formats.engine import usb
 from .formats.engine.analysis import managed_analysis_saved
 from .reporting import utc_now, write_run_report
 from .services import run_export, run_import
-from .usb import generation, sftp
+from .usb import generation, pioneer, sftp
 
 app = typer.Typer(
     help="Sync playlists between Traktor NML and M3U through a rebuildable local store.",
@@ -196,49 +196,68 @@ usb_app = typer.Typer(help="Build USB library exports and deliver them over SFTP
 app.add_typer(usb_app, name="usb")
 
 
+USB_FORMAT_OPTION = typer.Option(None, "--format", help="Select engine or pioneer (repeatable)")
+
+
 @usb_app.command(name="build")
-def usb_build(config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config")) -> None:
-    """Stage a new Engine USB generation from the closed Engine library."""
-    result = _usb_step(lambda: usb.build(**vars(load_engine_usb_config(config))))
-    typer.echo(
-        f"SUMMARY generation={result.generation.path.name} playlists={result.playlists} "
-        f"memberships={result.memberships} tracks={result.tracks} device={result.device}"
-    )
+def usb_build(
+    config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
+    formats: list[str] | None = USB_FORMAT_OPTION,
+) -> None:
+    """Stage USB generations from the closed Engine library."""
+
+    def run() -> None:
+        settings = load_usb_config(config, formats)
+        with generation.lock(settings.output_dir):
+            for name in settings.formats:
+                args = (settings.library, settings.output_dir / name, settings.playlist_root)
+                result = usb.build(*args).generation if name == "engine" else pioneer.build(*args)
+                typer.echo(f"SUMMARY format={name} generation={result.path.name}")
+
+    _usb_step(run)
 
 
 @usb_app.command(name="push")
 def usb_push(
     root: str = typer.Option(..., "--root", help="Stick root path on the SFTP server"),
     config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
+    formats: list[str] | None = USB_FORMAT_OPTION,
     apply: bool = typer.Option(False, "--apply", help="Write to the stick; default previews"),
     reviewed: str | None = typer.Option(
-        None, "--reviewed", help="SHA-256 of an edited stick database that may be replaced"
+        None, "--reviewed", help="SHA-256 of an edited Engine stick database that may be replaced"
     ),
 ) -> None:
-    """Send the current Engine generation's changed files, then its database."""
+    """Send the selected libraries to the same stick, databases last."""
 
-    def run() -> sftp.PushResult:
-        engine = load_engine_usb_config(config)
+    def run() -> None:
+        settings = load_usb_config(config, formats)
+        if reviewed is not None and "engine" not in settings.formats:
+            raise ConfigError("--reviewed applies only to Engine")
         device = load_usb_device_config(config)
-        with sftp.session(device) as client:
-            stick = sftp.enter_stick(client, root, mark=apply)
-            return sftp.push(
-                client,
-                generation.current(engine.output_dir),
-                sftp.StickState(device.state_dir, stick),
-                apply=apply,
-                reviewed=reviewed,
-            )
+        with generation.lock(settings.output_dir):
+            exports = {
+                name: generation.current(settings.output_dir / name) for name in settings.formats
+            }
+            with sftp.session(device) as client:
+                stick = sftp.enter_stick(client, root, mark=apply)
+                for name, export in exports.items():
+                    result = sftp.push(
+                        client,
+                        export,
+                        sftp.StickState(device.state_dir, stick, name),
+                        apply=apply,
+                        reviewed=reviewed,
+                    )
+                    for path in result.files:
+                        typer.echo(path)
+                    typer.echo(
+                        f"SUMMARY format={name} files={len(result.files)} bytes={result.bytes} "
+                        f"applied={str(result.applied).lower()}"
+                    )
+        if apply:
+            typer.echo("Delivery complete. Stop the SFTP server, then eject the drive.")
 
-    result = _usb_step(run)
-    for name in result.files:
-        typer.echo(name)
-    typer.echo(
-        f"SUMMARY files={len(result.files)} bytes={result.bytes} "
-        f"applied={str(result.applied).lower()}"
-    )
-    if result.applied:
-        typer.echo("Delivery complete. Stop the SFTP server, then eject the drive.")
+    _usb_step(run)
 
 
 @usb_app.command(name="review")
@@ -252,7 +271,7 @@ def usb_review(
     """Show where the stick's key, grids, cues and loops differ from Engine, or apply them."""
 
     def run() -> usb.Review:
-        engine = load_engine_usb_config(config)
+        engine = load_usb_config(config, ["engine"])
         device = load_usb_device_config(config)
         with sftp.session(device) as client:
             stick = sftp.enter_stick(client, root, mark=False)

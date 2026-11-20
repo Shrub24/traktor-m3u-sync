@@ -7,11 +7,13 @@ by atomically repointing ``current`` once it is complete; the previous one is ke
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import shutil
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,7 +43,7 @@ class Generation:
     path: Path
     files: Mapping[str, Entry]
     # Installed last, once every other file is on the stick.
-    activation: str
+    activation: tuple[str, ...]
 
     @property
     def tree(self) -> Path:
@@ -80,6 +82,14 @@ class HashCache:
         _write_json(self._path, self._used)
 
 
+@contextmanager
+def lock(output_dir: Path) -> Generator[None]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with (output_dir / "lock").open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+
+
 def start(output_dir: Path) -> Path:
     generations = output_dir / "generations"
     generations.mkdir(parents=True, exist_ok=True)
@@ -89,7 +99,7 @@ def start(output_dir: Path) -> Path:
     return path
 
 
-def publish(path: Path, files: Mapping[str, Entry], activation: str) -> Generation:
+def publish(path: Path, files: Mapping[str, Entry], activation: tuple[str, ...]) -> Generation:
     _write_json(
         path / MANIFEST,
         {
@@ -127,7 +137,7 @@ def current(output_dir: Path) -> Generation:
         )
         for name, value in cast(dict[str, dict[str, Any]], raw["files"]).items()
     }
-    return Generation(path, files, str(raw["activation"]))
+    return Generation(path, files, tuple(raw["activation"]))
 
 
 def _prune(generations: Path, *, keep: str) -> None:

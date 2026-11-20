@@ -28,7 +28,8 @@ from traktor_m3u_sync.formats.engine.performance import (
 )
 from traktor_m3u_sync.formats.engine.usb import DATABASE, EngineUsbError
 from traktor_m3u_sync.usb import generation
-from traktor_m3u_sync.usb.generation import Generation
+from traktor_m3u_sync.usb.generation import Entry, Generation
+from traktor_m3u_sync.usb.pioneer import DATABASES
 from traktor_m3u_sync.usb.sftp import DeliveryError, StickState, enter_stick, pull, push
 
 SCHEMA = (Path(__file__).parent / "fixtures" / "engine_3_0_2_schema.sql").read_text()
@@ -244,6 +245,50 @@ def test_push_is_incremental_resumable_and_database_last(
     assert _media(sftp.published) == []
     assert sftp.published[-1] == DATABASE
     assert (root / DATABASE).read_bytes() == (updated.tree / DATABASE).read_bytes()
+
+
+def test_pioneer_refresh_preserves_edits_and_resumes_a_partial_database_switch(
+    tmp_path: Path, stick: tuple[_Stick, Path]
+) -> None:
+    sftp, root = stick
+    stick_id = enter_stick(sftp, str(root), mark=True)
+    state = StickState(tmp_path / "state", stick_id, "pioneer")
+    analysis = "PIONEER/USBANLZ/P001/track/ANLZ0000.DAT"
+    audio = "Contents/audio.mp3"
+
+    def build(version: bytes) -> Generation:
+        path = generation.start(tmp_path / "pioneer")
+        files: dict[str, Entry] = {}
+        for name in (audio, analysis, *DATABASES):
+            data = b"audio" if name == audio else version + name.encode()
+            target = path / generation.TREE / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            files[name] = Entry(hashlib.sha256(data).hexdigest(), len(data))
+        return generation.publish(path, files, DATABASES)
+
+    initial = build(b"old")
+    push(sftp, initial, state, apply=True)
+    assert sftp.published[-3:] == list(DATABASES)
+    updated = build(b"new")
+    (root / analysis).write_bytes(b"player edit")
+    with pytest.raises(DeliveryError, match="Pioneer analysis has changed"):
+        push(sftp, updated, state, apply=True)
+    assert (root / analysis).read_bytes() == b"player edit"
+    (root / analysis).write_bytes(initial.local(analysis).read_bytes())
+
+    sftp.published.clear()
+    sftp.fail_on = DATABASES[1]
+    with pytest.raises(OSError, match="connection lost"):
+        push(sftp, updated, state, apply=True)
+    assert sftp.published[-2:] == [analysis, DATABASES[0]]
+    assert (root / DATABASES[0]).read_bytes() == updated.local(DATABASES[0]).read_bytes()
+    assert (root / DATABASES[1]).read_bytes() == initial.local(DATABASES[1]).read_bytes()
+
+    sftp.fail_on = None
+    push(sftp, updated, state, apply=True)
+    assert all((root / name).read_bytes() == updated.local(name).read_bytes() for name in DATABASES)
+    assert push(sftp, updated, state, apply=True).files == ()
 
 
 def test_each_stick_gets_its_own_identity_and_delivery(

@@ -54,19 +54,31 @@ Decoding and re-encoding an Engine `beatData`, `quickCues` or `loops` blob SHALL
 
 ### Requirement: Deliver USB generations over SFTP
 
-`usb push` SHALL deliver to the stick root given for the run, over SFTP with a pinned host key, identifying the stick by the UUID in its marker and writing one on first delivery. It SHALL send only files whose content differs from what that stick last received. It SHALL install the library database after every other file and record the delivery only then. It SHALL refuse to replace a stick database that differs from the one last installed, unless that exact database was reviewed.
+`usb build` and `usb push` SHALL share one `[usb]` configuration and use all enabled formats unless narrowed by repeatable `--format`. Push SHALL use pinned SFTP and the stick's marker UUID to track changed files per format, installing databases last.
+
+#### Scenario: Default format selection
+- **WHEN** neither the configuration nor the command selects formats
+- **THEN** both Engine and Pioneer are built or pushed to the same stick root
+
+#### Scenario: Unknown database
+- **WHEN** the stick holds a database not recognized by delivery state
+- **THEN** push saves a copy and refuses replacement, unless the exact Engine database was reviewed
 
 #### Scenario: Repeat delivery
 - **WHEN** the same generation is pushed again
 - **THEN** nothing is sent
 
 #### Scenario: Interrupted delivery
-- **WHEN** delivery stops before the database is installed
-- **THEN** the stick keeps its previous working library, and a retry sends only what is still missing
+- **WHEN** Engine delivery stops before its database is installed
+- **THEN** the stick keeps its previous working Engine library, and a retry reuses completed media
+
+#### Scenario: Interrupted Pioneer database switch
+- **WHEN** Pioneer delivery stops between database replacements
+- **THEN** a retry recognizes the partially installed set and finishes delivery without treating those replacements as player edits
 
 #### Scenario: Player edits
-- **WHEN** the stick database was changed on the player
-- **THEN** push keeps it and fails until that database is reviewed
+- **WHEN** a stick database was changed on the player, or delivery would overwrite edited Pioneer analysis
+- **THEN** push keeps the edited file and refuses replacement, unless the exact Engine database was reviewed
 
 ### Requirement: Return player edits to Engine
 

@@ -115,10 +115,11 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
 
 
 @dataclass(frozen=True)
-class EngineUsbConfig:
+class UsbConfig:
     library: Path
     output_dir: Path
-    playlist_root: str | None = None
+    playlist_root: str | None
+    formats: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -131,14 +132,29 @@ class UsbDeviceConfig:
     port: int = 22
 
 
-def load_engine_usb_config(path: Path) -> EngineUsbConfig:
-    table = _usb_table(path, "engine")
-    library = _optional_path(table, "library", "usb.engine")
-    output_dir = _optional_path(table, "output_dir", "usb.engine")
+USB_FORMATS = ("engine", "pioneer")
+
+
+def load_usb_config(path: Path, selected: list[str] | None = None) -> UsbConfig:
+    table = _require_table(_read_toml(path), "usb")
+    library = _optional_path(table, "library", "usb")
+    output_dir = _optional_path(table, "output_dir", "usb")
     if library is None or output_dir is None:
-        raise ConfigError("[usb.engine] requires library and output_dir")
-    return EngineUsbConfig(
-        library, output_dir, _optional_string(table, "playlist_root", "usb.engine")
+        raise ConfigError("[usb] requires library and output_dir")
+    formats = table.get("formats", list(USB_FORMATS))
+    if (
+        not isinstance(formats, list)
+        or not formats
+        or any(f not in USB_FORMATS for f in cast(list[object], formats))
+    ):
+        raise ConfigError("[usb].formats must be a nonempty list of engine and/or pioneer")
+    if selected and any(f not in formats for f in selected):
+        raise ConfigError("--format must select a format configured in [usb].formats")
+    return UsbConfig(
+        library,
+        output_dir,
+        _optional_string(table, "playlist_root", "usb"),
+        tuple(f for f in USB_FORMATS if f in (selected or formats)),
     )
 
 
