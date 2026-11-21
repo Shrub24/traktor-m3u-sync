@@ -94,7 +94,11 @@ Decoding and re-encoding an Engine `beatData`, `quickCues` or `loops` blob SHALL
 
 ### Requirement: Return player edits to Engine
 
-`usb review` SHALL list where the stick differs from current Engine, by key, beat grid, main cue and each hot cue and loop slot, with an approval code bound to both databases. Approving SHALL write the stick's value of exactly those fields into Engine, keep Engine's other bytes, and let the next push replace that stick database.
+`usb review` SHALL show eligible differences against current Engine by track, with an approval code bound to both databases and the selection policy. Approving SHALL apply key, grid, hot cue and loop differences only. `--report` SHALL write a versioned JSON diff including ignored changes and their selection status.
+
+#### Scenario: Deck moved the main cue during performance
+- **WHEN** the stick's main cue differs from Engine's
+- **THEN** the terminal counts it as ignored without showing a per-track diff for it, the JSON keeps both exact values, and approval leaves the Engine main cue unchanged
 
 #### Scenario: Hot cue added and grid moved on the player
 - **WHEN** a hot cue was set in one slot and the grid moved on one track

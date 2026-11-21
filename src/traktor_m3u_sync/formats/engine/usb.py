@@ -199,6 +199,12 @@ def _device_uuid(path: Path) -> uuid.UUID:
 class Review:
     changes: tuple[Change, ...]
     approval: str
+    engine_sha256: str
+    stick_sha256: str
+
+    @property
+    def selected(self) -> tuple[Change, ...]:
+        return tuple(change for change in self.changes if change.field != "main_cue")
 
 
 def review(library: Path, device_database: Path) -> Review:
@@ -206,8 +212,9 @@ def review(library: Path, device_database: Path) -> Review:
     approves exactly these two databases."""
     current = capture(library / "Database2" / "m.db")
     device = capture(device_database)
-    approval = hashlib.sha256(f"{current.sha256}:{device.sha256}".encode()).hexdigest()[:16]
-    return Review(diff(current, device), approval)
+    payload = f"ignore-main-cue:{current.sha256}:{device.sha256}"
+    approval = hashlib.sha256(payload.encode()).hexdigest()[:16]
+    return Review(diff(current, device), approval, current.sha256, device.sha256)
 
 
 def apply_review(library: Path, device_database: Path, approval: str) -> Review:
@@ -215,8 +222,9 @@ def apply_review(library: Path, device_database: Path, approval: str) -> Review:
     result = review(library, device_database)
     if result.approval != approval:
         raise EngineUsbError("The library or the stick changed since the review; review again")
-    publish(
-        library / "Database2" / "m.db",
-        lambda connection: apply_device_edits(connection, device_database, result.changes),
-    )
+    if result.selected:
+        publish(
+            library / "Database2" / "m.db",
+            lambda connection: apply_device_edits(connection, device_database, result.selected),
+        )
     return result

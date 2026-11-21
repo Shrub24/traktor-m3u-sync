@@ -138,6 +138,8 @@ class Change:
     slot: int | None
     current: object
     device: object
+    title: str
+    artist: str
 
 
 def diff(current: Snapshot, device: Snapshot) -> tuple[Change, ...]:
@@ -149,10 +151,11 @@ def diff(current: Snapshot, device: Snapshot) -> tuple[Change, ...]:
         if known is None:
             continue
         ours, theirs, path = known.performance, track.performance, known.path
+        title, artist = known.info.title, known.info.artist
 
         def compare(field: Field, slot: int | None, a: object, b: object) -> None:
             if a != b:
-                changes.append(Change(track.ref, path, field, slot, a, b))
+                changes.append(Change(track.ref, path, field, slot, a, b, title, artist))
 
         compare("key", None, ours.key, theirs.key)
         compare("grid", None, ours.grid, theirs.grid)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import socket
 import sqlite3
@@ -407,6 +408,12 @@ def test_review_and_approve_an_unmarked_stick(
     database.parent.mkdir(parents=True)
     database.write_bytes(built.local(DATABASE).read_bytes())
     _edit_on_player(database, edited)
+    with closing(sqlite3.connect(database)) as db, db:
+        cues = decode_quick_cues(db.execute("SELECT quickCues FROM PerformanceData").fetchone()[0])
+        db.execute(
+            "UPDATE PerformanceData SET quickCues = ?",
+            (encode_quick_cues(replace(cues, adjusted_main_cue=0.0, main_cue_adjusted=True)),),
+        )
     original = database.read_bytes()
     before = library.database.read_bytes()
     digest = hashlib.sha256(original).hexdigest()
@@ -437,15 +444,23 @@ def test_review_and_approve_an_unmarked_stick(
             ],
         )
 
-    result = run("review")
+    report = tmp_path / "review.json"
+    result = run("review", "--diff", "--report", str(report))
     assert result.exit_code == 0, result.output
+    assert "1 main cues ignored" in result.output
+    assert "Main cue:" not in result.output
+    changes = json.loads(report.read_text())["changes"]
+    (main,) = [entry for entry in changes if entry["field"] == "main_cue"]
+    assert main["device"] == 0.0 and main["selected"] is False
     assert library.database.read_bytes() == before
     code = usb.review(library.path, database).approval
     assert code in result.output
     result = run("review", "--approve", code)
     assert result.exit_code == 0, result.output
     assert digest in result.output
-    assert usb.review(library.path, database).changes == ()
+    after = usb.review(library.path, database)
+    assert after.selected == ()
+    assert [change.field for change in after.changes] == ["main_cue"]
     assert not (root / MARKER).exists()
     assert database.read_bytes() == original
 

@@ -330,11 +330,11 @@ state_dir = "~/.local/state/playlist-sync/usb"
 - Pioneer analysis and database files cannot be switched as a group. If delivery is
   interrupted, retry before using the stick. An edited analysis file blocks an upload that
   would replace it; there is no Pioneer read-back yet.
-- `usb review --root <path>` lists where the stick's key, beat grids, main cue, hot cues and
-  saved loops differ from Engine, per field and slot, with an approval code. With Engine closed,
-  `--approve <code>` writes the stick's value of each listed difference into Engine; it fails if
-  Engine or the stick changed since the review. Fields the comparison does not cover keep
-  Engine's bytes. The next push may then replace that stick database.
+- `usb review --root <path>` previews the stick's key, grid, hot cue and saved loop changes
+  as per-track diffs. `--diff` shows all eligible changes; `--report review.json` records
+  the full typed diff, including ignored main cues. With Engine closed, `--approve <code>`
+  applies the eligible changes only if both databases still match the review. The next push
+  may then replace that stick database.
 
 Delivery records follow the UUID in `.playlist-sync-stick`, created by `usb push --apply`.
 Preview, review and approval also work on unmarked sticks without writing a marker. If an

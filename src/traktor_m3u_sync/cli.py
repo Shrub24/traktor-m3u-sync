@@ -28,7 +28,7 @@ from .model.performance import select
 from .paths.uri import FileUriMapping
 from .reporting import utc_now, write_run_report
 from .services import run_export, run_import
-from .usb import generation, pioneer, sftp
+from .usb import generation, pioneer, review_report, sftp
 
 app = typer.Typer(
     help="Sync playlists between Traktor NML and M3U through a rebuildable local store.",
@@ -291,8 +291,10 @@ def usb_review(
         None, "--approve", help="Approval code from a previous review; writes it into Engine"
     ),
     config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
+    diff: bool = typer.Option(False, "--diff", help="Show all eligible changes"),
+    report: Path | None = typer.Option(None, "--report", help="Write the full JSON diff"),
 ) -> None:
-    """Show where the stick's key, grids, cues and loops differ from Engine, or apply them."""
+    """Review stick edits or apply them, excluding the main cue."""
 
     def run() -> usb.Review:
         engine = load_usb_config(config, ["engine"])
@@ -314,15 +316,9 @@ def usb_review(
             return result
 
     result = _usb_step(run)
-    for change in result.changes:
-        slot = "" if change.slot is None else f" {change.slot}"
-        typer.echo(
-            f"{change.path}: {change.field}{slot} engine={change.current!r} stick={change.device!r}"
-        )
-    if approve is None:
-        typer.echo(f"SUMMARY changes={len(result.changes)} approval={result.approval}")
-    else:
-        typer.echo(f"SUMMARY changes_applied={len(result.changes)}")
+    if report is not None:
+        _usb_step(lambda: review_report.write_review(report, result))
+    review_report.show(result, full=diff, applied=approve is not None)
 
 
 def _usb_step[T](step: Callable[[], T]) -> T:
