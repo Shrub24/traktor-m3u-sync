@@ -339,6 +339,34 @@ def test_edited_stick_database_is_kept_until_reviewed(
     assert (root / DATABASE).read_bytes() == (rebuilt.tree / DATABASE).read_bytes()
 
 
+@pytest.mark.parametrize(
+    ("suffix", "content", "allowed"),
+    [
+        ("-journal", b"", True),
+        ("-journal", b"pending", False),
+        ("-wal", b"", False),
+        ("-shm", b"", False),
+    ],
+)
+def test_pull_checks_sqlite_sidecars(
+    tmp_path: Path, stick: tuple[_Stick, Path], suffix: str, content: bytes, allowed: bool
+) -> None:
+    sftp, root = stick
+    state = _state(sftp, root, tmp_path)
+    database = root / DATABASE
+    database.parent.mkdir(parents=True)
+    database.write_bytes(b"database")
+    sidecar = database.with_name(database.name + suffix)
+    sidecar.write_bytes(content)
+
+    if allowed:
+        assert pull(sftp, state, DATABASE).snapshot.read_bytes() == b"database"
+    else:
+        with pytest.raises(DeliveryError, match="library was not closed cleanly"):
+            pull(sftp, state, DATABASE)
+    assert sidecar.read_bytes() == content
+
+
 def _grids(database: Path) -> dict[int, bytes]:
     rows = _rows(database, "SELECT trackId, beatData FROM PerformanceData")
     return {cast(int, track): cast(bytes, blob) for track, blob in rows}

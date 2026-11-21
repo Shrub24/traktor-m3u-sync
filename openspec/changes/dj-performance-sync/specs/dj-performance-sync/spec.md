@@ -100,6 +100,11 @@ Decoding and re-encoding an Engine `beatData`, `quickCues` or `loops` blob SHALL
 - **WHEN** a hot cue was set in one slot and the grid moved on one track
 - **THEN** the review lists exactly that slot and that grid, and approving it leaves other tracks and the unadjusted grid unchanged in Engine
 
+#### Scenario: SQLite sidecars on the stick
+- **WHEN** the stick database has an empty rollback journal but no WAL sidecars
+- **THEN** review can read the database without removing the journal
+- **AND** a nonempty rollback journal or any WAL sidecar blocks review and replacement
+
 #### Scenario: Unmarked Engine stick
 - **WHEN** an Engine stick has no delivery marker
 - **THEN** review and approval work without writing to the stick, and approval reports the exact database hash for explicit first delivery

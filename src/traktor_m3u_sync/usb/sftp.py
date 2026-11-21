@@ -252,8 +252,14 @@ def _check_replace(sftp: SFTPClient, activation: str, made: set[str]) -> None:
 
 def _read(sftp: SFTPClient, name: str) -> bytes:
     for suffix in ("-journal", "-wal", "-shm"):
-        if _mode(sftp, name + suffix) is not None:
-            raise DeliveryError(f"{name}{suffix} is present: the library was not closed cleanly")
+        sidecar = name + suffix
+        try:
+            attrs = sftp.lstat(sidecar)
+        except FileNotFoundError:
+            continue
+        if suffix == "-journal" and attrs.st_size == 0:
+            continue
+        raise DeliveryError(f"{sidecar} is present: the library was not closed cleanly")
     with sftp.open(name, "rb") as stream:
         stream.prefetch()
         return stream.read()
