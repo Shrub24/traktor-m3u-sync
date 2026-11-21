@@ -140,6 +140,8 @@ def push(
     *,
     apply: bool,
     reviewed: str | None = None,
+    rescan: bool = False,
+    register: Callable[[], StickState] | None = None,
     hash_audio: Callable[[SFTPClient, tuple[str, ...]], Mapping[str, str]] | None = None,
 ) -> PushResult:
     """``reviewed`` is the SHA-256 of a stick database that may be replaced although it is
@@ -176,7 +178,23 @@ def push(
         switching[name] = (digest, desired[name])
 
     media = tuple(name for name, entry in generation.files.items() if entry.source is not None)
-    digests = (hash_audio or remote_audio_hashes)(sftp, media) if media else {}
+    audio_cache = "audio.json"
+    scan = state.path / "audio-scan.json"
+    key = hashlib.sha256(
+        json.dumps(
+            [sftp.getcwd(), switching, {name: desired[name] for name in media}], sort_keys=True
+        ).encode()
+    ).hexdigest()
+    saved = (
+        cast(dict[str, dict[str, str]], json.loads(scan.read_text())).get(key)
+        if media and not rescan and scan.is_file()
+        else None
+    )
+    digests = saved if saved is not None else {} if rescan else state.hashes(audio_cache)
+    to_hash = tuple(name for name in media if name not in digests) if saved is None else ()
+    if to_hash:
+        digests.update((hash_audio or remote_audio_hashes)(sftp, to_hash))
+    digests = {name: digests[name] for name in media if name in digests}
     missing = sum(name not in digests for name in media)
     changed = sum(name in digests and digests[name] != desired[name] for name in media)
     reused = len(media) - missing - changed
@@ -207,7 +225,17 @@ def push(
     size = sum(generation.files[name].size for name in changes)
     result = PushResult(changes, size, apply and bool(changes), reused, missing, changed)
     if not apply:
+        if media:
+            _write(scan, json.dumps({key: digests}).encode())
         return result
+    if register is not None:
+        state = register()
+    if media:
+        scan.unlink(missing_ok=True)
+        state.record(
+            audio_cache,
+            {name: digest for name, digest in digests.items() if digest == desired[name]},
+        )
     if changes:
         made: set[str] = set()
         _check_replace(sftp, generation.activation[0], made)
@@ -218,6 +246,8 @@ def push(
             _make_dirs(sftp, PurePosixPath(name), made)
             _upload(sftp, generation.local(name), name, entry.sha256)
 
+        if media:
+            state.record(audio_cache, {name: desired[name] for name in media})
         for name in databases:
             database = generation.local(name)
             state.keep(database.read_bytes())

@@ -99,6 +99,11 @@ Engine delivery SHALL keep existing audio paths for matching origin tracks, reus
 - **WHEN** Engine delivery is previewed
 - **THEN** it reports verified, missing and changed audio counts and groups planned transfers by top-level folder unless individual files are requested
 
+#### Scenario: Reuse a verified audio scan
+- **WHEN** a push follows a preview for the same stick, database and export
+- **THEN** it reuses the preview's device audio hashes without rescanning
+- **AND** later pushes reuse verified or installed hashes without timestamp checks unless `--rescan` is requested
+
 #### Scenario: Stick exported by Engine
 - **WHEN** a stick already has a track with matching audio at another `Music/` path
 - **THEN** the new database uses that path and delivery does not copy the track again

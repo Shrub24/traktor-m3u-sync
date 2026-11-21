@@ -557,15 +557,37 @@ def test_review_and_approve_an_unmarked_stick(
     assert database.read_bytes() == original
 
     rebuilt = _build(library, output / "engine")
+    (audio_name,) = _media(list(rebuilt.files))
+    audio = root / audio_name
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"one")
     assert run("push", "--format", "engine").exit_code != 0
     result = run("push", "--format", "engine", "--reviewed", digest)
     assert result.exit_code == 0, result.output
     assert not (root / MARKER).exists()
     assert database.read_bytes() == original
-    result = run("push", "--format", "engine", "--reviewed", digest, "--apply")
-    assert result.exit_code == 0, result.output
+
+    def forbidden_scan(_: SFTPClient, __: str) -> str:
+        pytest.fail("push did not reuse the audio hashes")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(delivery, "_remote_command", forbidden_scan)
+        result = run("push", "--format", "engine", "--reviewed", digest, "--apply")
+        assert result.exit_code == 0, result.output
+        result = run("push", "--format", "engine")
+        assert result.exit_code == 0 and "files=0 bytes=0" in result.output
     assert (root / MARKER).is_file()
     assert database.read_bytes() == rebuilt.local(DATABASE).read_bytes()
+
+    audio.write_bytes(b"old")
+    result = run("push", "--format", "engine", "--rescan")
+    assert result.exit_code == 0 and "files=1 bytes=3" in result.output
+    assert audio.read_bytes() == b"old"
+    with monkeypatch.context() as patch:
+        patch.setattr(delivery, "_remote_command", forbidden_scan)
+        result = run("push", "--format", "engine", "--apply")
+        assert result.exit_code == 0, result.output
+    assert audio.read_bytes() == b"one"
 
 
 def test_review_writes_player_edits_into_engine_and_releases_the_stick(

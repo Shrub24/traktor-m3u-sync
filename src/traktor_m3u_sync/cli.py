@@ -266,6 +266,7 @@ def usb_push(
     formats: list[str] | None = USB_FORMAT_OPTION,
     apply: bool = typer.Option(False, "--apply", help="Write to the stick; default previews"),
     files: bool = typer.Option(False, "--files", help="List every file to send"),
+    rescan: bool = typer.Option(False, "--rescan", help="Ignore cached Engine audio hashes"),
     reviewed: str | None = typer.Option(
         None, "--reviewed", help="SHA-256 of an edited Engine stick database that may be replaced"
     ),
@@ -274,15 +275,21 @@ def usb_push(
 
     def run() -> None:
         settings = load_usb_config(config, formats)
-        if reviewed is not None and "engine" not in settings.formats:
-            raise ConfigError("--reviewed applies only to Engine")
+        if "engine" not in settings.formats and (reviewed is not None or rescan):
+            raise ConfigError("--reviewed and --rescan apply only to Engine")
         device = load_usb_device_config(config)
         with generation.lock(settings.output_dir):
             exports = {
                 name: generation.current(settings.output_dir / name) for name in settings.formats
             }
             with sftp.session(device) as client:
-                stick = sftp.enter_stick(client, root, mark=apply)
+                stick = sftp.enter_stick(client, root, mark=False)
+
+                def register(format_name: str) -> sftp.StickState:
+                    nonlocal stick
+                    stick = sftp.enter_stick(client, root, mark=True)
+                    return sftp.StickState(device.state_dir, stick, format_name)
+
                 for name, export in exports.items():
                     state = sftp.StickState(device.state_dir, stick, name)
                     if name == "engine":
@@ -298,6 +305,8 @@ def usb_push(
                         state,
                         apply=apply,
                         reviewed=reviewed,
+                        rescan=rescan,
+                        register=(lambda: register(name)) if stick is None else None,
                     )
                     for path in result.files if files else ():
                         typer.echo(path)

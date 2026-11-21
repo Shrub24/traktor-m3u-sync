@@ -323,7 +323,7 @@ state_dir = "~/.local/state/playlist-sync/usb"
   A failed build leaves the previous generation for that format current.
 - `usb push --root <path>` delivers the selected formats to the **same stick**. It previews
   by default; `--apply` copies changed files, then installs each format's databases.
-  It requires SFTP `posix-rename` with overwrite. Engine push reuses existing paths by origin track ID and requires SSH command access with `sha256sum` on the SFTP server. It verifies audio on the device without downloading it and replaces changed audio in place by temporary-file rename. The preview counts files by top-level folder; add `--files` to list them. A database the tool did not install is
+  It requires SFTP `posix-rename` with overwrite. Engine push reuses existing paths by origin track ID and requires SSH command access with `sha256sum` on the SFTP server. It hashes uncached audio on the device without downloading it and replaces changed audio in place by temporary-file rename. Preview saves the scan on the host for a matching apply; later pushes reuse the stick's verified audio hashes. Use `usb push --format engine --rescan` after changing audio outside the sync or to check for missing files. The preview counts files by top-level folder; add `--files` to list them. A database the tool did not install is
   backed up and blocks replacement; `--reviewed <sha256>` permits replacing that exact
   Engine database only. Back up and move any existing Pioneer library off the stick before
   adopting it.
