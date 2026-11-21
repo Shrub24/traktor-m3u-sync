@@ -93,10 +93,14 @@ Decoding and re-encoding an Engine `beatData`, `quickCues` or `loops` blob SHALL
 - **THEN** push keeps the edited file and refuses replacement, unless the exact Engine database was reviewed
 
 ### Requirement: Adopt audio already on a stick
-Engine delivery SHALL reuse the audio paths an existing stick database uses for the same Engine origin tracks, send only audio the stick lacks, and replace changed audio at its path through an atomic temporary-file rename. Without a delivery record, an existing file whose size matches is trusted. Previews SHALL report file counts by top-level folder unless every file is requested.
+Engine delivery SHALL keep existing audio paths for matching origin tracks, reuse audio only after a device-side SHA-256 match over pinned SSH, and atomically replace changed audio in place. A failed checksum scan SHALL stop delivery.
+
+#### Scenario: Preview audio transfers
+- **WHEN** Engine delivery is previewed
+- **THEN** it reports verified, missing and changed audio counts and groups planned transfers by top-level folder unless individual files are requested
 
 #### Scenario: Stick exported by Engine
-- **WHEN** a stick already has a track at another `Music/` path
+- **WHEN** a stick already has a track with matching audio at another `Music/` path
 - **THEN** the new database uses that path and delivery does not copy the track again
 
 ### Requirement: Return player edits to Engine

@@ -303,6 +303,11 @@ def usb_push(
                         typer.echo(path)
                     for group, count in Counter(p.split("/")[0] for p in result.files).items():
                         typer.echo(f"  {group}: {count} files")
+                    if name == "engine":
+                        typer.echo(
+                            f"Audio: {result.audio_reused} verified/reused, "
+                            f"{result.audio_missing} missing, {result.audio_changed} changed"
+                        )
                     typer.echo(
                         f"SUMMARY format={name} files={len(result.files)} bytes={result.bytes} "
                         f"applied={str(result.applied).lower()}"

@@ -219,7 +219,14 @@ def adopt(export: Generation, stick_database: Path, work: Path) -> Generation:
             old = existing.get((origin, origin_id))
             if old is None or old == path:
                 continue
-            renamed[f"{LIBRARY}/{path}"] = f"{LIBRARY}/{old}"
+            relative = PurePosixPath(old)
+            if (
+                not relative.is_relative_to("Music")
+                or len(relative.parts) < 2
+                or ".." in relative.parts
+            ):
+                raise EngineUsbError(f"Invalid stick audio path: {old}")
+            renamed[f"{LIBRARY}/{path}"] = f"{LIBRARY}/{relative}"
             db.execute(
                 "UPDATE Track SET path = ?, filename = ? WHERE id = ?",
                 (old, PurePosixPath(old).name, track_id),

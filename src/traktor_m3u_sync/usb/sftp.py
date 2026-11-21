@@ -11,18 +11,21 @@ import fcntl
 import hashlib
 import json
 import os
+import re
+import shlex
 import stat
 import uuid
-from collections.abc import Generator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from itertools import batched
 from pathlib import Path, PurePosixPath
 from typing import cast
 
 from paramiko import SFTPClient, SSHClient
 
 from ..config import UsbDeviceConfig
-from .generation import Entry, Generation
+from .generation import Generation
 
 MARKER = ".playlist-sync-stick"
 _CHUNK = 1024 * 1024
@@ -37,6 +40,9 @@ class PushResult:
     files: tuple[str, ...]
     bytes: int
     applied: bool
+    audio_reused: int
+    audio_missing: int
+    audio_changed: int
 
 
 @dataclass(frozen=True)
@@ -134,6 +140,7 @@ def push(
     *,
     apply: bool,
     reviewed: str | None = None,
+    hash_audio: Callable[[SFTPClient, tuple[str, ...]], Mapping[str, str]] | None = None,
 ) -> PushResult:
     """``reviewed`` is the SHA-256 of a stick database that may be replaced although it is
     not the one this tool installed."""
@@ -145,13 +152,6 @@ def push(
         else {}
     )
     desired = {name: entry.sha256 for name, entry in generation.files.items()}
-    assets = sorted(
-        name
-        for name in desired
-        if name not in generation.activation
-        and (previous.get(name) != desired[name] or name in pending)
-        and not _present(sftp, name, generation.files[name], previous.get(name))
-    )
     databases: list[str] = []
     switching: dict[str, tuple[str | None, str]] = {}
     for name in generation.activation:
@@ -175,6 +175,21 @@ def push(
             databases.append(name)
         switching[name] = (digest, desired[name])
 
+    media = tuple(name for name, entry in generation.files.items() if entry.source is not None)
+    digests = (hash_audio or remote_audio_hashes)(sftp, media) if media else {}
+    missing = sum(name not in digests for name in media)
+    changed = sum(name in digests and digests[name] != desired[name] for name in media)
+    reused = len(media) - missing - changed
+    assets = sorted(
+        name
+        for name, entry in generation.files.items()
+        if name not in generation.activation
+        and (
+            digests.get(name) != desired[name]
+            if entry.source is not None
+            else previous.get(name) != desired[name] or name in pending
+        )
+    )
     for name in tuple(assets):
         if not name.startswith("PIONEER/USBANLZ/"):
             switching[name] = (previous.get(name), desired[name])
@@ -190,8 +205,9 @@ def push(
 
     changes = (*assets, *databases)
     size = sum(generation.files[name].size for name in changes)
+    result = PushResult(changes, size, apply and bool(changes), reused, missing, changed)
     if not apply:
-        return PushResult(changes, size, applied=False)
+        return result
     if changes:
         made: set[str] = set()
         _check_replace(sftp, generation.activation[0], made)
@@ -208,7 +224,7 @@ def push(
             _upload(sftp, database, name, desired[name])
     state.record("installed.json", desired)
     (state.path / "pending.json").unlink(missing_ok=True)
-    return PushResult(changes, size, applied=bool(changes))
+    return result
 
 
 def _upload(sftp: SFTPClient, source: Path, name: str, sha256: str) -> None:
@@ -229,14 +245,45 @@ def _upload(sftp: SFTPClient, source: Path, name: str, sha256: str) -> None:
             sftp.remove(temp)
 
 
-def _present(sftp: SFTPClient, name: str, entry: Entry, known: str | None) -> bool:
-    """Audio an earlier export left on the stick: trusted by size until a manifest records it."""
-    if entry.source is None or known is not None:
-        return False
-    try:
-        return sftp.lstat(name).st_size == entry.size
-    except FileNotFoundError:
-        return False
+def remote_audio_hashes(sftp: SFTPClient, names: tuple[str, ...]) -> dict[str, str]:
+    root = sftp.getcwd()
+    assert root is not None
+    hashes: dict[str, str] = {}
+    for batch in batched(names, 32):
+        paths = shlex.join([str(PurePosixPath(root) / name) for name in batch])
+        command = (
+            "command -v sha256sum >/dev/null || exit 1; "
+            f"for path in {paths}; do "
+            'if [ -e "$path" ]; then '
+            '[ -f "$path" ] && sha256sum < "$path" || exit 1; '
+            "else printf '%s\\n' -; fi; done"
+        )
+        rows = _remote_command(sftp, command).splitlines()
+        if len(rows) != len(batch):
+            raise DeliveryError("Unexpected number of stick audio hashes")
+        for name, row in zip(batch, rows, strict=True):
+            if row == "-":
+                continue
+            match = re.fullmatch(r"([0-9a-f]{64})\s+-", row)
+            if match is None:
+                raise DeliveryError(f"Invalid stick audio hash for {name}")
+            hashes[name] = match[1]
+    return hashes
+
+
+def _remote_command(sftp: SFTPClient, command: str) -> str:
+    sftp_channel = sftp.get_channel()
+    assert sftp_channel is not None
+    transport = sftp_channel.get_transport()
+    with transport.open_session(timeout=15) as channel:
+        channel.settimeout(120)
+        channel.set_combine_stderr(True)
+        channel.exec_command(command)
+        with channel.makefile("rb") as output:
+            result = output.read().decode(errors="replace")
+        if channel.recv_exit_status() != 0:
+            raise DeliveryError(f"Could not hash stick audio over SSH: {result.strip()}")
+        return result
 
 
 def _check_replace(sftp: SFTPClient, activation: str, made: set[str]) -> None:

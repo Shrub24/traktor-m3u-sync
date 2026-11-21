@@ -31,6 +31,7 @@ from traktor_m3u_sync.formats.engine.performance import (
 )
 from traktor_m3u_sync.formats.engine.usb import DATABASE, EngineUsbError
 from traktor_m3u_sync.usb import generation
+from traktor_m3u_sync.usb import sftp as delivery
 from traktor_m3u_sync.usb.generation import Entry, Generation
 from traktor_m3u_sync.usb.pioneer import DATABASES
 from traktor_m3u_sync.usb.sftp import MARKER, DeliveryError, StickState, enter_stick, pull, push
@@ -231,7 +232,11 @@ class _Socket(socket.socket):
 
 
 @pytest.fixture
-def stick(tmp_path: Path) -> Iterator[tuple[_Stick, Path]]:
+def stick(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[_Stick, Path]]:
+    def local_command(_: SFTPClient, command: str) -> str:
+        return subprocess.check_output(["sh", "-c", command], text=True)
+
+    monkeypatch.setattr(delivery, "_remote_command", local_command)
     server_binary = os.environ.get("SFTP_SERVER")
     assert server_binary, "SFTP_SERVER must name OpenSSH's sftp-server (set by the dev shell)"
     root = tmp_path / "stick"
@@ -315,12 +320,15 @@ def test_existing_stick_audio_is_kept_and_changed_audio_is_replaced_in_place(
     music = root / "Engine Library/Music/Old"
     music.mkdir(parents=True)
     (music / "one.mp3").write_bytes(b"one")
-    (music / "two.mp3").write_bytes(b"2")
+    (music / "two.mp3").write_bytes(b"old")
     state = _state(sftp, root, tmp_path)
     stale = hashlib.sha256(database.read_bytes()).hexdigest()
 
     adopted = usb.adopt(built, database, tmp_path / "adopted")
     sftp.published.clear()
+    preview = push(sftp, adopted, state, apply=False, reviewed=stale)
+    assert (preview.audio_reused, preview.audio_missing, preview.audio_changed) == (1, 0, 1)
+    assert (music / "two.mp3").read_bytes() == b"old"
     push(sftp, adopted, state, apply=True, reviewed=stale)
 
     assert _media(sftp.published) == ["Engine Library/Music/Old/two.mp3"]
