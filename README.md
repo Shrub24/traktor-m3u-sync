@@ -330,6 +330,11 @@ state_dir = "~/.local/state/playlist-sync/usb"
 - Pioneer analysis and database files cannot be switched as a group. If delivery is
   interrupted, retry before using the stick. An edited analysis file blocks an upload that
   would replace it; there is no Pioneer read-back yet.
+- With Engine closed, `engine-start-cues --engine-database <m.db> --engine-managed-root <name>`
+  previews a Hot Cue A backfill. Add `--apply` to seed empty slots at the first saved downbeat
+  (or file start if unavailable), or repeat `--track-id <id>` to limit the run. Existing A slots
+  are kept. Engine USB uses A as its deck cue; Pioneer USB and reference XML mirror A into a
+  memory cue without exporting Engine's deck cue.
 - `usb review --root <path>` previews the stick's key, grid, hot cue and saved loop changes
   as per-track diffs. `--diff` shows all eligible changes; `--report review.json` records
   the full typed diff, including ignored main cues. With Engine closed, `--approve <code>`

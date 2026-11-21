@@ -115,6 +115,54 @@ def _build(library: Library, output: Path, root: str | None = "Sync") -> Generat
     return usb.build(library.path, output, root).generation
 
 
+def test_prepared_start_is_previewed_and_projected_only_to_the_stick(tmp_path: Path) -> None:
+    library = Library(tmp_path)
+    first = library.track("one.mp3", b"one")
+    second = library.track("two.mp3", b"two")
+    library.add(library.playlist("Sync"), first, second)
+    with library.connect() as db:
+        grid = decode_beat_data(REAL_BEAT_DATA)
+        a, b = grid.adjusted_grid[:2]
+        sample = 1200.0
+        markers = (
+            replace(a, sample=sample - 4000, beat=-4),
+            replace(b, sample=sample + 4000, beat=4),
+        )
+        db.execute(
+            "UPDATE PerformanceData SET beatData = ?",
+            (encode_beat_data(replace(grid, grid_set=True, adjusted_grid=markers)),),
+        )
+    before = library.database.read_bytes()
+    args = [
+        "engine-start-cues",
+        "--engine-database",
+        str(library.database),
+        "--engine-managed-root",
+        "Sync",
+        "--track-id",
+        str(first),
+    ]
+    runner = CliRunner()
+    result = runner.invoke(cli.app, args)
+    assert result.exit_code == 0, result.output
+    assert library.database.read_bytes() == before
+    result = runner.invoke(cli.app, [*args, "--apply"])
+    assert result.exit_code == 0, result.output
+    source = usb.capture(library.database)
+    by_id = {track.ref.track_id: track.performance for track in source.tracks}
+    assert by_id[first].hot_cues[1].position == pytest.approx(sample / grid.sample_rate)
+    assert 1 not in by_id[second].hot_cues
+    before = library.database.read_bytes()
+    result = runner.invoke(cli.app, [*args, "--apply"])
+    assert result.exit_code == 0, result.output
+    assert library.database.read_bytes() == before
+    staged = usb.capture(_build(library, tmp_path / "out").local(DATABASE))
+    exported = {track.ref.track_id: track.performance for track in staged.tracks}
+    assert exported[first].main_cue == by_id[first].hot_cues[1].position
+    assert exported[second].main_cue == by_id[second].main_cue
+    assert library.database.read_bytes() == before
+
+
 def test_build_exports_the_selected_tree_with_stable_device_and_media_paths(
     tmp_path: Path,
 ) -> None:

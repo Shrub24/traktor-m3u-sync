@@ -275,6 +275,16 @@ def test_rekordbox_xml_exports_selected_engine_grid_cues_and_playlist(tmp_path: 
     _engine_db(database)
     with sqlite3.connect(database) as connection:
         connection.execute("DELETE FROM PlaylistEntity WHERE id = 22")
+    with sqlite3.connect(database) as connection:
+        (blob,) = connection.execute(
+            "SELECT quickCues FROM PerformanceData WHERE trackId = 5"
+        ).fetchone()
+        cues = decode_quick_cues(blob)
+        seeded = replace(cues, cues=(replace(cues.cues[0], sample=RATE), *cues.cues[1:]))
+        connection.execute(
+            "UPDATE PerformanceData SET quickCues = ? WHERE trackId = 5",
+            (encode_quick_cues(seeded),),
+        )
     config = tmp_path / "usb.toml"
     config.write_text(
         f'[usb]\nlibrary = "{library}"\noutput_dir = "{tmp_path / "out"}"\nplaylist_root = "Sync"\n'
@@ -307,7 +317,7 @@ def test_rekordbox_xml_exports_selected_engine_grid_cues_and_playlist(tmp_path: 
     assert {
         (mark.attrib["Type"], mark.attrib["Num"], float(mark.attrib["Start"]))
         for mark in a.findall("POSITION_MARK")
-    } == {("0", "-1", 0.5), ("0", "1", 2.0), ("4", "-1", 1.0)}
+    } == {("0", "-1", 1.0), ("0", "0", 1.0), ("0", "1", 2.0), ("4", "-1", 1.0)}
     (loop,) = a.findall("POSITION_MARK[@Type='4']")
     assert float(loop.attrib["End"]) == 2.0
     assert [track.attrib["Key"] for track in xml.findall("./PLAYLISTS/NODE/NODE/NODE/TRACK")] == [

@@ -83,9 +83,9 @@ def _performance(track: ET.Element, performance: Performance) -> None:
             Metro="4/4",
             Battito=str(beat),
         )
-    if performance.main_cue is not None:
+    if (start := performance.hot_cues.get(1)) is not None:
         ET.SubElement(
-            track, "POSITION_MARK", Name="", Type="0", Start=str(performance.main_cue), Num="-1"
+            track, "POSITION_MARK", Name=start.label, Type="0", Start=str(start.position), Num="-1"
         )
     for slot, cue in sorted(performance.hot_cues.items()):
         ET.SubElement(

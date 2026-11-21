@@ -40,7 +40,7 @@ can leave mixed assets or databases; finish a retry before using the stick.
 
 ## Rulings
 
-1. The Pioneer exporter writes Engine's main cue as a memory cue and saved loops as memory loops.
+1. Hot Cue A is the prepared start point. Engine USB projects it into the stick's main cue; Pioneer USB and reference XML mirror it into a memory cue. The deck can move its main cue during performance, so it is not written back. Saved loops remain memory loops.
 2. Pioneer downbeats assume a beat index divisible by 4 starts a bar, until rekordbox desktop confirms it.
 3. Exporters carry Engine's saved grid unchanged, even where it disagrees with `bpmAnalyzed`. Pioneer BPM derives from the grid.
 4. Read-back compares the stick with current Engine, not with what was delivered, and approved differences take the stick's value. Engine runs headless, so between a delivery and its read-back only the player changes performance data. Revisit with a second writer of performance data (another stick of the same tracks, or enrichment into Engine), where a delivered baseline would be needed to tell which side changed.

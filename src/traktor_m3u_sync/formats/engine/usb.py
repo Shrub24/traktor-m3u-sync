@@ -24,6 +24,7 @@ from ...model.performance import Change, diff
 from ...usb import generation
 from ...usb.generation import Entry, Generation, HashCache
 from .performance import apply_device_edits, capture
+from .start_cues import project_main_cues
 from .writer import SCHEMA_VERSION, preflight_target, publish
 
 LIBRARY = "Engine Library"
@@ -91,6 +92,7 @@ def _stage(
         db.execute("PRAGMA recursive_triggers = ON")
         with db:
             _select(db, playlist_root, source_uuid)
+            project_main_cues(db)
             files = _assets(db, library, tree / LIBRARY, source_uuid, str(device), hashes)
             db.execute(
                 "UPDATE Information SET uuid = ?, lastRekordBoxLibraryImportReadCounter = NULL",

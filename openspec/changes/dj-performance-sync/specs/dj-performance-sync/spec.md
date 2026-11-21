@@ -38,7 +38,7 @@ Decoding and re-encoding an Engine `beatData`, `quickCues` or `loops` blob SHALL
 
 ### Requirement: Write Pioneer USB libraries from a snapshot
 
-`pioneer-usb` SHALL write a Pioneer USB library for a snapshot's playlist tree, in its order, with each track's beat grid, key, main cue, hot cues and saved loops taken from the snapshot and only waveforms computed from the audio. Every beat of the grid SHALL be written, with beats whose index is divisible by 4 as downbeats. Comments SHALL NOT be exported; names in a comment's `/* a / b */` lists SHALL become My Tags. It SHALL fail when the written library does not verify.
+`pioneer-usb` SHALL write a Pioneer USB library for a snapshot's playlist tree, in its order, with each track's beat grid, key, hot cues and saved loops taken from the snapshot and only waveforms computed from the audio. Every beat of the grid SHALL be written, with beats whose index is divisible by 4 as downbeats. Comments SHALL NOT be exported; names in a comment's `/* a / b */` lists SHALL become My Tags. It SHALL fail when the written library does not verify.
 
 #### Scenario: Half-time grid
 - **WHEN** Engine's saved grid is half the displayed BPM
@@ -54,7 +54,7 @@ Decoding and re-encoding an Engine `beatData`, `quickCues` or `loops` blob SHALL
 
 ### Requirement: Export a rekordbox XML reference library
 
-`usb rekordbox-xml` SHALL read the same closed Engine library and playlist selection as the USB build. It SHALL emit an ordered rekordbox playlist XML with consumer-side file URIs and Engine's saved key, grid, main cue, hot cues and loops. It SHALL NOT alter the playlist-store XML export.
+`usb rekordbox-xml` SHALL read the same closed Engine library and playlist selection as the USB build. It SHALL emit an ordered rekordbox playlist XML with consumer-side file URIs and Engine's saved key, grid, hot cues and loops. It SHALL NOT alter the playlist-store XML export.
 
 #### Scenario: Grid starts before the audio
 - **WHEN** Engine's first grid marker is before zero
@@ -116,6 +116,13 @@ Decoding and re-encoding an Engine `beatData`, `quickCues` or `loops` blob SHALL
 #### Scenario: Stale approval
 - **WHEN** Engine or the stick changed after the review
 - **THEN** approving fails and Engine is unchanged
+
+### Requirement: Prepare a start cue separately from the deck cue
+The system SHALL preview or seed empty Hot Cue A slots on analyzed managed tracks with Engine closed. It SHALL use the first saved downbeat in the file, or zero when none is usable, and never replace an existing A.
+
+#### Scenario: Export a prepared track
+- **WHEN** a track has Hot Cue A
+- **THEN** Engine USB uses A as its main cue in the staged copy, and Pioneer USB and rekordbox XML retain A as a hot cue and mirror it as a memory cue instead of exporting Engine's main cue
 
 ### Requirement: Serialize performance snapshots
 

@@ -49,7 +49,8 @@ struct Track {
     path: String,
     key: Option<Key>,
     grid: Vec<(f64, i64)>,
-    main_cue: Option<f64>,
+    #[serde(rename = "main_cue")]
+    _main_cue: Option<f64>,
     hot_cues: BTreeMap<u32, Cue>,
     loops: BTreeMap<u32, Loop>,
     info: Info,
@@ -158,8 +159,7 @@ fn colour_code(rgb: [u8; 3]) -> u8 {
     (1..=64).min_by_key(|code| distance(*code)).unwrap_or(0)
 }
 
-/// Engine's eight hot cues are A to H; its main cue is a memory cue and its saved loops
-/// are memory loops.
+/// Mirror A as a memory cue; saved loops are memory loops.
 fn cues(track: &Track) -> Result<Vec<ExportCue>> {
     let mut out = Vec::new();
     for (&slot, cue) in &track.hot_cues {
@@ -176,9 +176,10 @@ fn cues(track: &Track) -> Result<Vec<ExportCue>> {
             ..Default::default()
         });
     }
-    if let Some(position) = track.main_cue {
+    if let Some(cue) = track.hot_cues.get(&1) {
         out.push(ExportCue {
-            time_ms: ms(position)?,
+            time_ms: ms(cue.position)?,
+            comment: cue.label.clone(),
             ..Default::default()
         });
     }
@@ -568,12 +569,35 @@ mod tests {
                 color: [255, 0, 0],
             },
         );
+        assert!(
+            cues(&track)
+                .unwrap()
+                .iter()
+                .all(|cue| cue.kind != 0 || cue.loop_time_ms.is_some())
+        );
+        track.hot_cues.insert(
+            1,
+            Cue {
+                position: 0.25,
+                label: "Start".into(),
+                color: [0, 0, 0],
+            },
+        );
         let kinds: Vec<_> = cues(&track)
             .unwrap()
             .iter()
-            .map(|c| (c.kind, c.loop_time_ms))
+            .map(|c| (c.kind, c.time_ms, c.loop_time_ms))
             .collect();
-        assert_eq!(kinds, [(2, None), (5, None), (0, None), (0, Some(2000))]);
+        assert_eq!(
+            kinds,
+            [
+                (1, 250, None),
+                (2, 2000, None),
+                (5, 1000, None),
+                (0, 250, None),
+                (0, 1000, Some(2000))
+            ]
+        );
         track.hot_cues.insert(
             9,
             Cue {

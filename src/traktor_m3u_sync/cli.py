@@ -23,6 +23,7 @@ from .contracts import AdapterWarning, SyncResult
 from .formats.engine import usb
 from .formats.engine.analysis import managed_analysis_saved
 from .formats.engine.performance import capture
+from .formats.engine.start_cues import prepare
 from .formats.rekordbox.performance import write_snapshot
 from .model.performance import select
 from .paths.uri import FileUriMapping
@@ -194,6 +195,22 @@ def engine_analysis(
         typer.echo(f"ERROR code=engine_analysis_failed detail={exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(json.dumps({str(track_id): done for track_id, done in saved.items()}))
+
+
+@app.command(name="engine-start-cues")
+def engine_start_cues(
+    engine_database: Path = typer.Option(..., "--engine-database"),
+    engine_managed_root: str = typer.Option("Playlist Sync", "--engine-managed-root"),
+    track_ids: list[int] | None = typer.Option(None, "--track-id"),
+    apply: bool = typer.Option(False, "--apply"),
+) -> None:
+    """Preview or seed empty Hot Cue A slots while Engine is closed."""
+    changes = _usb_step(
+        lambda: prepare(engine_database, engine_managed_root, track_ids or (), apply=apply)
+    )
+    for path, seconds in changes:
+        typer.echo(f"{seconds:.3f}s  {path}")
+    typer.echo(f"SUMMARY start_cues={len(changes)} applied={str(apply).lower()}")
 
 
 usb_app = typer.Typer(help="Build USB library exports and deliver them over SFTP.")
