@@ -52,7 +52,12 @@
               python.pkgs.pillow
               python.pkgs.typer
             ];
-            makeWrapperArgs = [ "--prefix PATH : ${pkgs.lib.makeBinPath [ pioneer-usb ]}" ];
+            makeWrapperArgs = [
+              "--prefix"
+              "PATH"
+              ":"
+              (pkgs.lib.makeBinPath [ pioneer-usb ])
+            ];
             doCheck = false;
             meta = {
               description = "Traktor NML to M3U playlist sync tool";
