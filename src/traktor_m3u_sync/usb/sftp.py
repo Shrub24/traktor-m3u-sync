@@ -22,7 +22,7 @@ from typing import cast
 from paramiko import SFTPClient, SSHClient
 
 from ..config import UsbDeviceConfig
-from .generation import Generation
+from .generation import Entry, Generation
 
 MARKER = ".playlist-sync-stick"
 _CHUNK = 1024 * 1024
@@ -150,6 +150,7 @@ def push(
         for name in desired
         if name not in generation.activation
         and (previous.get(name) != desired[name] or name in pending)
+        and not _present(sftp, name, generation.files[name], previous.get(name))
     )
     databases: list[str] = []
     switching: dict[str, tuple[str | None, str]] = {}
@@ -199,9 +200,6 @@ def push(
         for name in assets:
             entry = generation.files[name]
             _make_dirs(sftp, PurePosixPath(name), made)
-            # Engine media is content-addressed and appears only after a complete upload.
-            if entry.source is not None and _mode(sftp, name) is not None:
-                continue
             _upload(sftp, generation.local(name), name, entry.sha256)
 
         for name in databases:
@@ -229,6 +227,16 @@ def _upload(sftp: SFTPClient, source: Path, name: str, sha256: str) -> None:
     finally:
         if _mode(sftp, temp) is not None:
             sftp.remove(temp)
+
+
+def _present(sftp: SFTPClient, name: str, entry: Entry, known: str | None) -> bool:
+    """Audio an earlier export left on the stick: trusted by size until a manifest records it."""
+    if entry.source is None or known is not None:
+        return False
+    try:
+        return sftp.lstat(name).st_size == entry.size
+    except FileNotFoundError:
+        return False
 
 
 def _check_replace(sftp: SFTPClient, activation: str, made: set[str]) -> None:

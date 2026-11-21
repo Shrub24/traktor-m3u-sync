@@ -146,6 +146,7 @@ def _assets(
     hashes: HashCache,
 ) -> dict[str, Entry]:
     files: dict[str, Entry] = {}
+    owners: dict[str, Path] = {}
 
     def staged(relative: PurePosixPath, source: Path) -> None:
         destination = target / relative
@@ -170,9 +171,9 @@ def _assets(
         digest, size = hashes.sha256(audio)
         if size >= _FAT32_MAX:
             raise EngineUsbError(f"Track exceeds the FAT32 file size limit: {audio}")
-        name = _UNSAFE.sub("_", audio.name).rstrip(". ")
-        # Changed audio gets a new path, so it never replaces a file the installed database uses.
-        relative = PurePosixPath("Music", str(track_id), digest, f"{track_id}-{name}")
+        relative = _stick_path(audio, library.parent)
+        if owners.setdefault(str(relative).casefold(), audio) != audio:
+            raise EngineUsbError(f"Two different files map to the stick path {relative}")
         files[f"{LIBRARY}/{relative}"] = Entry(digest, size, source=audio)
         db.execute(
             "UPDATE Track SET path = ?, filename = ? WHERE id = ?",
@@ -186,6 +187,50 @@ def _assets(
         name = base64.urlsafe_b64encode(digest).rstrip(b"=").decode() + ".jpg"
         staged(PurePosixPath("Artwork", name), library / "Artwork" / name)
     return files
+
+
+def _stick_path(audio: Path, root: Path) -> PurePosixPath:
+    parts = audio.relative_to(root).parts
+    parts = parts[1:] if parts[0] == "library" else parts
+    return PurePosixPath("Music", *(_UNSAFE.sub("_", part).rstrip(". ") for part in parts))
+
+
+def adopt(export: Generation, stick_database: Path, work: Path) -> Generation:
+    """Point tracks the stick already has at the audio paths it uses, so that audio is kept."""
+    with closing(sqlite3.connect(stick_database.as_uri() + "?mode=ro", uri=True)) as stick:
+        existing = {
+            (origin, track_id): path
+            for origin, track_id, path in stick.execute(
+                "SELECT originDatabaseUuid, originTrackId, path FROM Track"
+            )
+        }
+    shutil.rmtree(work, ignore_errors=True)
+    tree = work / generation.TREE
+    database = tree / DATABASE
+    database.parent.mkdir(parents=True)
+    shutil.copyfile(export.local(DATABASE), database)
+    for shared in ("Artwork", "Database2/OverviewData"):
+        (tree / LIBRARY / shared).symlink_to(export.tree / LIBRARY / shared)
+    renamed: dict[str, str] = {}
+    with closing(sqlite3.connect(database)) as db, db:
+        for track_id, origin, origin_id, path in db.execute(
+            "SELECT id, originDatabaseUuid, originTrackId, path FROM Track"
+        ).fetchall():
+            old = existing.get((origin, origin_id))
+            if old is None or old == path:
+                continue
+            renamed[f"{LIBRARY}/{path}"] = f"{LIBRARY}/{old}"
+            db.execute(
+                "UPDATE Track SET path = ?, filename = ? WHERE id = ?",
+                (old, PurePosixPath(old).name, track_id),
+            )
+    files = {
+        renamed.get(name, name): entry for name, entry in export.files.items() if name != DATABASE
+    }
+    if len(files) != len(export.files) - 1:
+        raise EngineUsbError("Two tracks would share a stick path")
+    files[DATABASE] = Entry(generation.file_sha256(database), database.stat().st_size)
+    return Generation(work, files, export.activation)
 
 
 def _device_uuid(path: Path) -> uuid.UUID:

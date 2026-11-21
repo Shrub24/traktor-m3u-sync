@@ -318,12 +318,12 @@ state_dir = "~/.local/state/playlist-sync/usb"
 
 - `usb build` builds every configured format from the closed Engine library. Repeat
   `--format engine` or `--format pioneer` to select formats for either build or push.
-  Engine keeps its native analysis, a stable drive UUID and content-addressed media paths.
+  Engine keeps its native analysis, a stable drive UUID and Engine-style `Music/` paths.
   Pioneer builds both Device Library and OneLibrary, with its own audio copy in `Contents/`.
   A failed build leaves the previous generation for that format current.
 - `usb push --root <path>` delivers the selected formats to the **same stick**. It previews
   by default; `--apply` copies changed files, then installs each format's databases.
-  It requires SFTP `posix-rename` with overwrite. A database the tool did not install is
+  It requires SFTP `posix-rename` with overwrite. An existing stick's audio paths are reused by Engine origin track ID, trusted by file size until a delivery record exists; changed audio is replaced in place by temporary-file rename. The preview counts files by top-level folder; add `--files` to list them. A database the tool did not install is
   backed up and blocks replacement; `--reviewed <sha256>` permits replacing that exact
   Engine database only. Back up and move any existing Pioneer library off the stick before
   adopting it.

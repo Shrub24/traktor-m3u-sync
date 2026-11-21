@@ -26,7 +26,7 @@ Decoding and re-encoding an Engine `beatData`, `quickCues` or `loops` blob SHALL
 
 ### Requirement: Build Engine USB generations
 
-`usb build` SHALL stage a standalone Engine library for the selected playlist tree from a closed Engine database, as a native clone with the source's track IDs and origins, a device UUID kept across builds, and media at content-addressed paths. It SHALL publish the generation with a manifest of every file only after the staged database passes integrity checks, keep the previous generation until then, and never modify the source.
+`usb build` SHALL stage a standalone Engine library for the selected playlist tree from a closed Engine database, as a native clone with the source's track IDs and origins, a device UUID kept across builds, and media at Engine-style `Music/` paths derived from the library path. It SHALL publish the generation with a manifest of every file only after the staged database passes integrity checks, keep the previous generation until then, and never modify the source.
 
 #### Scenario: Track without saved analysis
 - **WHEN** a selected track has no saved beat grid
@@ -91,6 +91,13 @@ Decoding and re-encoding an Engine `beatData`, `quickCues` or `loops` blob SHALL
 #### Scenario: Player edits
 - **WHEN** a stick database was changed on the player, or delivery would overwrite edited Pioneer analysis
 - **THEN** push keeps the edited file and refuses replacement, unless the exact Engine database was reviewed
+
+### Requirement: Adopt audio already on a stick
+Engine delivery SHALL reuse the audio paths an existing stick database uses for the same Engine origin tracks, send only audio the stick lacks, and replace changed audio at its path through an atomic temporary-file rename. Without a delivery record, an existing file whose size matches is trusted. Previews SHALL report file counts by top-level folder unless every file is requested.
+
+#### Scenario: Stick exported by Engine
+- **WHEN** a stick already has a track at another `Music/` path
+- **THEN** the new database uses that path and delivery does not copy the track again
 
 ### Requirement: Return player edits to Engine
 

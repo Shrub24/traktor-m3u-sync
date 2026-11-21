@@ -33,8 +33,7 @@ class GenerationError(RuntimeError):
 class Entry:
     sha256: str
     size: int
-    # Media is read from its source at delivery and lives at a content-addressed path on the
-    # stick; None marks a staged library file, which delivery may replace in place.
+    # Media is read from its source at delivery; None marks a staged library file.
     source: Path | None = None
 
 

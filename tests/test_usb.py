@@ -298,6 +298,42 @@ def test_push_is_incremental_resumable_and_database_last(
     assert (root / DATABASE).read_bytes() == (updated.tree / DATABASE).read_bytes()
 
 
+def test_existing_stick_audio_is_kept_and_changed_audio_is_replaced_in_place(
+    tmp_path: Path, stick: tuple[_Stick, Path]
+) -> None:
+    sftp, root = stick
+    library = Library(tmp_path)
+    library.add(
+        library.playlist("Sync"), library.track("one.mp3", b"one"), library.track("two.mp3", b"two")
+    )
+    built = _build(library, tmp_path / "out")
+    database = root / DATABASE
+    database.parent.mkdir(parents=True)
+    database.write_bytes((built.tree / DATABASE).read_bytes())
+    with closing(sqlite3.connect(database)) as db, db:
+        db.execute("UPDATE Track SET path = 'Music/Old/' || filename")
+    music = root / "Engine Library/Music/Old"
+    music.mkdir(parents=True)
+    (music / "one.mp3").write_bytes(b"one")
+    (music / "two.mp3").write_bytes(b"2")
+    state = _state(sftp, root, tmp_path)
+    stale = hashlib.sha256(database.read_bytes()).hexdigest()
+
+    adopted = usb.adopt(built, database, tmp_path / "adopted")
+    sftp.published.clear()
+    push(sftp, adopted, state, apply=True, reviewed=stale)
+
+    assert _media(sftp.published) == ["Engine Library/Music/Old/two.mp3"]
+    assert (music / "one.mp3").read_bytes() == b"one"
+    assert (music / "two.mp3").read_bytes() == b"two"
+    assert not (root / "Engine Library/Music/one.mp3").exists()
+    assert _rows(database, "SELECT path FROM Track ORDER BY id") == [
+        ("Music/Old/one.mp3",),
+        ("Music/Old/two.mp3",),
+    ]
+    assert (root / "Engine Library/Database2/OverviewData").is_dir()
+
+
 def test_pioneer_refresh_preserves_edits_and_resumes_a_partial_database_switch(
     tmp_path: Path, stick: tuple[_Stick, Path]
 ) -> None:

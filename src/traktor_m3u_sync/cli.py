@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 
@@ -264,6 +265,7 @@ def usb_push(
     config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
     formats: list[str] | None = USB_FORMAT_OPTION,
     apply: bool = typer.Option(False, "--apply", help="Write to the stick; default previews"),
+    files: bool = typer.Option(False, "--files", help="List every file to send"),
     reviewed: str | None = typer.Option(
         None, "--reviewed", help="SHA-256 of an edited Engine stick database that may be replaced"
     ),
@@ -282,15 +284,25 @@ def usb_push(
             with sftp.session(device) as client:
                 stick = sftp.enter_stick(client, root, mark=apply)
                 for name, export in exports.items():
+                    state = sftp.StickState(device.state_dir, stick, name)
+                    if name == "engine":
+                        try:
+                            pulled = sftp.pull(client, state, usb.DATABASE)
+                        except FileNotFoundError:
+                            pass
+                        else:
+                            export = usb.adopt(export, pulled.snapshot, state.path / "adopted")
                     result = sftp.push(
                         client,
                         export,
-                        sftp.StickState(device.state_dir, stick, name),
+                        state,
                         apply=apply,
                         reviewed=reviewed,
                     )
-                    for path in result.files:
+                    for path in result.files if files else ():
                         typer.echo(path)
+                    for group, count in Counter(p.split("/")[0] for p in result.files).items():
+                        typer.echo(f"  {group}: {count} files")
                     typer.echo(
                         f"SUMMARY format={name} files={len(result.files)} bytes={result.bytes} "
                         f"applied={str(result.applied).lower()}"
