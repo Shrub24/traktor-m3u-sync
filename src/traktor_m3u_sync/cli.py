@@ -301,11 +301,17 @@ def usb_review(
             stick = sftp.enter_stick(client, root, mark=False)
             state = sftp.StickState(device.state_dir, stick)
             pulled = sftp.pull(client, state, usb.DATABASE)
-        if approve is None:
-            return usb.review(engine.library, pulled.snapshot)
-        result = usb.apply_review(engine.library, pulled.snapshot, approve)
-        state.accept(pulled.sha256)
-        return result
+            if approve is None:
+                return usb.review(engine.library, pulled.snapshot)
+            result = usb.apply_review(engine.library, pulled.snapshot, approve)
+            if stick is not None:
+                state.accept(pulled.sha256)
+            else:
+                typer.echo(
+                    "For the first push, confirm the existing Engine database with "
+                    f"--reviewed {pulled.sha256}."
+                )
+            return result
 
     result = _usb_step(run)
     for change in result.changes:

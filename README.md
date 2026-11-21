@@ -336,8 +336,10 @@ state_dir = "~/.local/state/playlist-sync/usb"
   Engine or the stick changed since the review. Fields the comparison does not cover keep
   Engine's bytes. The next push may then replace that stick database.
 
-A stick is identified by the UUID in `.playlist-sync-stick` at its root, written by its first
-push, so any number of sticks share one configuration. After a push, stop the SFTP server and
+Delivery records follow the UUID in `.playlist-sync-stick`, created by `usb push --apply`.
+Preview, review and approval also work on unmarked sticks without writing a marker. If an
+unmarked stick already has an Engine database, pass `--reviewed <sha256>` on the first push
+using the hash printed on approval. A marker alone does not authorize replacement. After a push, stop the SFTP server and
 eject the stick on the device before unplugging it.
 
 ### Native rekordbox reference export

@@ -49,8 +49,8 @@ class PullResult:
 class StickState:
     """What was installed on one stick, plus every database delivered to or pulled from it."""
 
-    def __init__(self, state_dir: Path, stick: uuid.UUID, format: str = "engine") -> None:
-        self.path = state_dir / str(stick)
+    def __init__(self, state_dir: Path, stick: uuid.UUID | None, format: str = "engine") -> None:
+        self.path = state_dir / (str(stick) if stick is not None else "unmarked")
         if format != "engine":
             self.path /= format
         self.path.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -107,7 +107,7 @@ def session(device: UsbDeviceConfig) -> Generator[SFTPClient]:
             yield sftp
 
 
-def enter_stick(sftp: SFTPClient, root: str, *, mark: bool) -> uuid.UUID:
+def enter_stick(sftp: SFTPClient, root: str, *, mark: bool) -> uuid.UUID | None:
     """Enter the stick at ``root`` and return the ID in its marker, writing one if ``mark``."""
     sftp.chdir(root)
     try:
@@ -115,7 +115,7 @@ def enter_stick(sftp: SFTPClient, root: str, *, mark: bool) -> uuid.UUID:
             return uuid.UUID(stream.read(64).decode().strip())
     except FileNotFoundError:
         if not mark:
-            raise DeliveryError(f"No {MARKER} at {root}: nothing was delivered there") from None
+            return None
     stick = uuid.uuid4()
     with sftp.open(MARKER, "wx") as stream:
         stream.write(f"{stick}\n")
@@ -164,6 +164,11 @@ def push(
                 raise DeliveryError(
                     f"The stick database {name} is not the one last installed; saved it to {copy}. "
                     "Review its edits before replacing it."
+                    + (
+                        f" Engine database SHA-256: {digest}"
+                        if len(generation.activation) == 1
+                        else ""
+                    )
                 )
         if digest != desired[name]:
             databases.append(name)

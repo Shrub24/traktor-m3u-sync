@@ -9,7 +9,7 @@ import sqlite3
 import subprocess
 import uuid
 from collections.abc import Iterator
-from contextlib import closing
+from contextlib import closing, nullcontext
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -17,7 +17,9 @@ from typing import cast
 import pytest
 from engine_blobs import REAL_BEAT_DATA, REAL_LOOPS, REAL_QUICK_CUES
 from paramiko import Channel, SFTPClient
+from typer.testing import CliRunner, Result
 
+from traktor_m3u_sync import cli
 from traktor_m3u_sync.formats.engine import usb
 from traktor_m3u_sync.formats.engine.performance import (
     QuickCue,
@@ -30,7 +32,7 @@ from traktor_m3u_sync.formats.engine.usb import DATABASE, EngineUsbError
 from traktor_m3u_sync.usb import generation
 from traktor_m3u_sync.usb.generation import Entry, Generation
 from traktor_m3u_sync.usb.pioneer import DATABASES
-from traktor_m3u_sync.usb.sftp import DeliveryError, StickState, enter_stick, pull, push
+from traktor_m3u_sync.usb.sftp import MARKER, DeliveryError, StickState, enter_stick, pull, push
 
 SCHEMA = (Path(__file__).parent / "fixtures" / "engine_3_0_2_schema.sql").read_text()
 SOURCE = uuid.UUID("8ae3af13-4aae-44e6-91c2-8abc483ba2c9")
@@ -301,8 +303,8 @@ def test_each_stick_gets_its_own_identity_and_delivery(
     first = _state(sftp, root / "a", tmp_path)
     push(sftp, built, first, apply=True)
     (root / "b").mkdir()
-    with pytest.raises(DeliveryError, match="nothing was delivered"):
-        enter_stick(sftp, str(root / "b"), mark=False)
+    assert enter_stick(sftp, str(root / "b"), mark=False) is None
+    assert not (root / "b" / MARKER).exists()
 
     second = _state(sftp, root / "b", tmp_path)
     assert second.path != first.path
@@ -362,6 +364,73 @@ def _edit_on_player(database: Path, track_id: int) -> None:
                 track_id,
             ),
         )
+
+
+def test_review_and_approve_an_unmarked_stick(
+    tmp_path: Path, stick: tuple[_Stick, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sftp, root = stick
+    library = Library(tmp_path)
+    edited = library.track("one.mp3", b"one")
+    library.add(library.playlist("Sync"), edited)
+    output = tmp_path / "out"
+    built = _build(library, output / "engine")
+    database = root / DATABASE
+    database.parent.mkdir(parents=True)
+    database.write_bytes(built.local(DATABASE).read_bytes())
+    _edit_on_player(database, edited)
+    original = database.read_bytes()
+    before = library.database.read_bytes()
+    digest = hashlib.sha256(original).hexdigest()
+    config = tmp_path / "usb.toml"
+    config.write_text(
+        f'[usb]\nlibrary = "{library.path}"\noutput_dir = "{output}"\n'
+        '[usb.device]\nhost = "unused"\nuser = "unused"\n'
+        'key_file = "unused"\nknown_hosts = "unused"\n'
+        f'state_dir = "{tmp_path / "state"}"\n'
+    )
+
+    def session(_: object) -> nullcontext[_Stick]:
+        return nullcontext(sftp)
+
+    monkeypatch.setattr(cli.sftp, "session", session)
+
+    def run(command: str, *args: str) -> Result:
+        return CliRunner().invoke(
+            cli.app,
+            [
+                "usb",
+                command,
+                "--config",
+                str(config),
+                "--root",
+                str(root),
+                *args,
+            ],
+        )
+
+    result = run("review")
+    assert result.exit_code == 0, result.output
+    assert library.database.read_bytes() == before
+    code = usb.review(library.path, database).approval
+    assert code in result.output
+    result = run("review", "--approve", code)
+    assert result.exit_code == 0, result.output
+    assert digest in result.output
+    assert usb.review(library.path, database).changes == ()
+    assert not (root / MARKER).exists()
+    assert database.read_bytes() == original
+
+    rebuilt = _build(library, output / "engine")
+    assert run("push", "--format", "engine").exit_code != 0
+    result = run("push", "--format", "engine", "--reviewed", digest)
+    assert result.exit_code == 0, result.output
+    assert not (root / MARKER).exists()
+    assert database.read_bytes() == original
+    result = run("push", "--format", "engine", "--reviewed", digest, "--apply")
+    assert result.exit_code == 0, result.output
+    assert (root / MARKER).is_file()
+    assert database.read_bytes() == rebuilt.local(DATABASE).read_bytes()
 
 
 def test_review_writes_player_edits_into_engine_and_releases_the_stick(

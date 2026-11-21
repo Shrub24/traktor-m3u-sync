@@ -72,6 +72,10 @@ Decoding and re-encoding an Engine `beatData`, `quickCues` or `loops` blob SHALL
 - **WHEN** the stick holds a database not recognized by delivery state
 - **THEN** push saves a copy and refuses replacement, unless the exact Engine database was reviewed
 
+#### Scenario: First delivery preview
+- **WHEN** push previews delivery to a stick without a marker
+- **THEN** it treats the stick as having no delivery history and does not write a marker
+
 #### Scenario: Repeat delivery
 - **WHEN** the same generation is pushed again
 - **THEN** nothing is sent
@@ -95,6 +99,10 @@ Decoding and re-encoding an Engine `beatData`, `quickCues` or `loops` blob SHALL
 #### Scenario: Hot cue added and grid moved on the player
 - **WHEN** a hot cue was set in one slot and the grid moved on one track
 - **THEN** the review lists exactly that slot and that grid, and approving it leaves other tracks and the unadjusted grid unchanged in Engine
+
+#### Scenario: Unmarked Engine stick
+- **WHEN** an Engine stick has no delivery marker
+- **THEN** review and approval work without writing to the stick, and approval reports the exact database hash for explicit first delivery
 
 #### Scenario: Stale approval
 - **WHEN** Engine or the stick changed after the review
