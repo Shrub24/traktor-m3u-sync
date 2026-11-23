@@ -192,6 +192,37 @@ def test_manager_delivers_selected_playlists_only_after_confirmation(
     assert not (root / "Engine Library/Music/two.mp3").exists()
 
 
+def test_build_publishes_engine_when_pioneer_fails_and_reports_both(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    library = Library(tmp_path)
+    library.add(library.playlist("Sync"), library.track("one.mp3", b"one"))
+    output = tmp_path / "exports"
+    config = tmp_path / "usb.toml"
+    config.write_text(
+        f'[usb]\nlibrary = "{library.path}"\noutput_dir = "{output}"\nplaylist_root = "Sync"\n'
+    )
+
+    def unsupported(*_: object) -> Generation:
+        raise generation.GenerationError("07 Pls Stop.opus: unsupported codec")
+
+    monkeypatch.setattr(cli.pioneer, "build", unsupported)
+    report = tmp_path / "build.json"
+    result = CliRunner().invoke(
+        cli.app, ["usb", "build", "--config", str(config), "--report-file", str(report)]
+    )
+
+    assert result.exit_code == 1, result.output
+    engine = generation.current(output / "engine")
+    document = json.loads(report.read_text())
+    assert document["status"] == "partial"
+    by_format = {entry["format"]: entry for entry in document["formats"]}
+    assert by_format["engine"]["generation"] == engine.path.name
+    assert by_format["engine"]["error"] is None
+    assert by_format["pioneer"]["generation"] is None
+    assert "Pls Stop.opus" in by_format["pioneer"]["error"]
+
+
 def test_prepared_start_is_previewed_and_projected_only_to_the_stick(tmp_path: Path) -> None:
     library = Library(tmp_path)
     first = library.track("one.mp3", b"one")

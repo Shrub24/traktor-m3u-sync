@@ -7,6 +7,7 @@ import sqlite3
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
+from time import monotonic
 
 import typer
 
@@ -30,8 +31,8 @@ from .model.performance import select
 from .paths.uri import FileUriMapping
 from .reporting import utc_now, write_run_report
 from .services import run_export, run_import
-from .usb import generation, pioneer, review_report, sftp, terminal
-from .usb.manager import Manager
+from .usb import build_report, generation, pioneer, review_report, sftp, terminal
+from .usb.manager import OPERATION_ERRORS, Manager
 
 app = typer.Typer(
     help="Sync playlists between Traktor NML and M3U through a rebuildable local store.",
@@ -226,18 +227,43 @@ USB_FORMAT_OPTION = typer.Option(None, "--format", help="Select engine or pionee
 def usb_build(
     config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
     formats: list[str] | None = USB_FORMAT_OPTION,
+    report_file: Path | None = typer.Option(
+        None, "--report-file", help="Write a JSON report of each format's outcome"
+    ),
 ) -> None:
-    """Stage USB generations from the closed Engine library."""
+    """Stage USB generations from the closed Engine library.
 
-    def run() -> None:
+    A failed format keeps its previous generation and does not stop the others."""
+
+    def run() -> list[build_report.Outcome]:
         settings = load_usb_config(config, formats)
+        outcomes: list[build_report.Outcome] = []
         with generation.lock(settings.output_dir):
             for name in settings.formats:
-                args = (settings.library, settings.output_dir / name, settings.playlist_root)
-                result = usb.build(*args).generation if name == "engine" else pioneer.build(*args)
-                typer.echo(f"SUMMARY format={name} generation={result.path.name}")
+                output = settings.output_dir / name
+                args = (settings.library, output, settings.playlist_root)
+                previous = build_report.published_name(output)
+                began = monotonic()
+                built: str | None = None
+                error: str | None = None
+                try:
+                    built = (
+                        usb.build(*args).generation if name == "engine" else pioneer.build(*args)
+                    ).path.name
+                except OPERATION_ERRORS as exc:
+                    error = str(exc)
+                seconds = round(monotonic() - began, 1)
+                outcome = build_report.Outcome(name, previous, built, error, seconds)
+                outcomes.append(outcome)
+                typer.echo(outcome.summary())
+        return outcomes
 
-    _usb_step(run)
+    started = utc_now()
+    outcomes = _usb_step(run)
+    if report_file is not None:
+        build_report.write(report_file, started, utc_now(), outcomes)
+    if any(outcome.error is not None for outcome in outcomes):
+        raise typer.Exit(code=1)
 
 
 @usb_app.command(name="rekordbox-xml")

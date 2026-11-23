@@ -1,29 +1,12 @@
 """Interactive frontend to the stick manager."""
 
 import curses
-import sqlite3
 from dataclasses import dataclass
 
-from paramiko import SSHException
-
-from ..formats.engine.performance import EnginePerformanceError
-from ..formats.engine.usb import EngineUsbError
-from ..formats.engine.writer import EngineWriteError
 from . import review_report
-from .generation import GenerationError
+from .manager import OPERATION_ERRORS as _OPERATION_ERRORS
 from .manager import Manager, PlaylistPath, Playlists, marker
-from .sftp import DeliveryError, PushResult
-
-_OPERATION_ERRORS = (
-    DeliveryError,
-    EnginePerformanceError,
-    EngineUsbError,
-    EngineWriteError,
-    GenerationError,
-    OSError,
-    sqlite3.Error,
-    SSHException,
-)
+from .sftp import PushResult
 
 _LABEL = {"engine": "Engine DJ", "pioneer": "rekordbox"}
 

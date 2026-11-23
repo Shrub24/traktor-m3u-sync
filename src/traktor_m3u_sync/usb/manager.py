@@ -1,18 +1,32 @@
 """Inspect and deliver prepared libraries without refreshing the source."""
 
+import sqlite3
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import UUID
 
-from paramiko import SFTPClient
+from paramiko import SFTPClient, SSHException
 
 from ..config import UsbConfig, UsbDeviceConfig
 from ..formats.engine import usb
-from ..formats.engine.performance import capture
-from ..formats.engine.writer import preflight_target
-from ..model.performance import PlaylistNode, Snapshot, loads
+from ..formats.engine.performance import EnginePerformanceError, capture
+from ..formats.engine.writer import EngineWriteError, preflight_target
+from ..model.performance import PlaylistNode, Snapshot, SnapshotError, loads
 from . import generation, pioneer, sftp
+
+# Failures an operator can act on; anything else is a bug and propagates.
+OPERATION_ERRORS = (
+    sftp.DeliveryError,
+    EnginePerformanceError,
+    usb.EngineUsbError,
+    EngineWriteError,
+    generation.GenerationError,
+    SnapshotError,
+    OSError,
+    sqlite3.Error,
+    SSHException,
+)
 
 type PlaylistPath = tuple[str, ...]
 type PlaylistTracks = tuple[object, ...]

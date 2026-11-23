@@ -87,10 +87,7 @@ def _stage(
     snapshot_file = path / "snapshot.json"
     snapshot_file.write_text(dumps(snapshot), encoding="utf-8")
     args = (snapshot_file, library, work, cache)
-    if prepared:
-        _helper("assemble", *args)
-    else:
-        subprocess.run(["pioneer-usb", *args], check=True)
+    _helper(*(("assemble", *args) if prepared else args))
     return Generation(path, _files(work, path / generation.TREE, hashes), DATABASES)
 
 
