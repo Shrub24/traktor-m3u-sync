@@ -11,8 +11,25 @@ A refresh SHALL update playlists and Engine, complete any required Engine analys
 - **WHEN** required analysis fails or Engine cannot be confirmed closed
 - **THEN** refresh does not build from that library and reports why it stopped
 
+### Requirement: Select playlists for a stick
+The Sync Manager SHALL show the playlist folder hierarchy with a single selection marker and a separate change marker per playlist. It SHALL initialize each format's selection from the library on the stick.
+
+#### Scenario: Edit the selected set
+- **WHEN** an operator adds, removes or keeps a playlist whose contents changed
+- **THEN** the tree distinguishes those changes without relying on color
+- **AND** the export confirmation previews each selected format separately and does not delete audio for deselected playlists
+
+#### Scenario: Export a subset
+- **WHEN** an operator previews delivery of selected playlists
+- **THEN** the workflow assembles that set from prepared artifacts without fetching playlists, launching Engine or generating waveforms
+
 ### Requirement: Guide per-stick delivery
 Stick sync SHALL require an explicit target, offer Engine edit review before replacement, and preview the transfer before asking for delivery approval. It SHALL retain existing library safety checks.
+
+#### Scenario: Review either direction
+- **WHEN** the operator invokes import or export
+- **THEN** the manager shows the relevant diff or dry-run summary and asks for confirmation before writing
+- **AND** playlist selection does not filter Engine edit review
 
 #### Scenario: Keep player edits
 - **WHEN** the operator approves eligible edits

@@ -2,7 +2,7 @@
 
 ## Ownership
 
-The application sequences DJ operations and owns their outcomes, progress, retry eligibility, and confirmations. It calls the same operations the standalone CLI uses. The guided CLI renders and responds to application decisions; it does not implement a second workflow.
+The application sequences DJ operations and owns their outcomes, progress, retry eligibility, and confirmations. It calls the same operations the standalone CLI uses. The Sync Manager TUI renders and responds to application decisions; it does not implement a second workflow.
 
 The deployment supplies the playlist fetch and Engine-offline operations. In homelab, these are Navidrome and Windows/libvirt, respectively. Keep VM start/stop, guest coordination, credentials, time limits and policy downstream; keep Engine library checks and writes in the application. Start with the configured fetch and guest runner as the only external operations; no plugin registry or arbitrary command graph. Preserve exclusive access to the Engine write window, including against standalone writers. A fixture runner can exercise the workflow without systemd or a Windows VM.
 
@@ -11,7 +11,26 @@ Systemd supervises the invocation, controls the identity and resources, and rout
 ## Actions
 
 - **Refresh exports:** fetch → import playlists → update Engine → analyze pending tracks if needed → verify Engine is closed → build selected formats. There is no stick I/O. Skipping guest analysis does not skip export: playlist membership or order may still have changed.
-- **Sync this stick:** the operator starts it from the device holding the stick and supplies an explicit target. Inspect → optionally review and approve Engine edits → rebuild outputs affected by accepted edits → preview delivery → confirm → deliver. Reuse the existing edit report and confirmation guards. Skipping import is not permission to replace an unknown or edited database. Never resume by applying stale approval.
+- **Sync Manager:** the operator supplies an explicit stick target. Browse one format at a time; export Engine, rekordbox, or both. Each format has its own selection, initialized from the actual stick library (empty for a blank stick), not the delivery cache.
+- **← Import player edits:** open the existing Engine diff in a confirmation popup. The playlist selection does not filter this operation. It writes approved edits to Engine only, not playlists, audio or the stick. Pioneer import is unavailable.
+- **Export playlists →:** preview the selected playlist set and transfer per format in a confirmation popup. Show playlist changes, audio reuse and transfer bytes, and database replacements. Unchecking a playlist removes it from the exported library, not its audio from the stick. Skipping import does not authorize replacement of an unknown or edited database.
+
+### Playlist tree
+
+```text
+Engine DJ · Lexar USB
+▾ Sets
+  [x]   Dub Set
+  [x] ^ Peak Time
+  [x] + Afterhours
+  [ ] - Warmup
+
+[← Import player edits]   [Export playlists →]
+```
+
+The checkbox shows desired membership; the adjacent marker shows the change relative to the stick: add `+`, remove `-`, update `^`, blank if unchanged. Update means the selected playlist's exported content differs, not merely that it was selected. Color and Nerd Font icons can supplement the markers but must not be needed to read them.
+
+Playlist sync prepares the full library on the host. Stick export assembles the selected libraries from prepared artifacts without fetching playlists, launching Engine, or generating waveforms. Benchmark subset assembly with rbxport before making a latency claim. Approved player edits invalidate affected prepared outputs; refresh those from Engine before previewing an export, rather than offering a plan from stale data.
 
 ## Reporting and recovery
 
@@ -21,9 +40,9 @@ Treat harmless duplicates as warnings. Unsupported or unreadable audio makes onl
 
 ## Alternatives
 
-1. **Application workflow + guided CLI (recommended):** one execution model with progress and approvals that can be reused by other surfaces. Costs a small reporting and composition layer.
+1. **Application workflow + Linux Sync Manager (recommended):** one execution model with progress and approvals that can be reused by other surfaces. Costs a small reporting and composition layer.
 2. **Keep chaining units and aggregate journals:** least change to deployment, but stage outcomes and recovery still have to be inferred from multiple unit runs.
-3. **Web-first workflow service:** easiest way to reattach from another device, but adds authentication and service state before the workflow contract is proven. Keep OliveTin as a possible refresh launcher and Tasker as a bridge launcher; neither owns approvals or retries. Defer a web UI and TUI until the guided CLI proves the workflow.
+3. **Web-first workflow service:** easiest way to reattach from another device, but adds authentication and service state before the workflow contract is proven. Keep OliveTin as a possible refresh launcher and Tasker as a bridge launcher; neither owns approvals or retries. Defer a web UI until the Linux Sync Manager proves the workflow.
 
 ## Performance baseline
 
