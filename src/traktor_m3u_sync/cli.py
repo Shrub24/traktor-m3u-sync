@@ -30,7 +30,8 @@ from .model.performance import select
 from .paths.uri import FileUriMapping
 from .reporting import utc_now, write_run_report
 from .services import run_export, run_import
-from .usb import generation, pioneer, review_report, sftp
+from .usb import generation, pioneer, review_report, sftp, terminal
+from .usb.manager import Manager
 
 app = typer.Typer(
     help="Sync playlists between Traktor NML and M3U through a rebuildable local store.",
@@ -325,6 +326,20 @@ def usb_push(
             typer.echo("Delivery complete. Stop the SFTP server, then eject the drive.")
 
     _usb_step(run)
+
+
+@usb_app.command(name="manage")
+def usb_manage(
+    root: str = typer.Option(..., "--root", help="Stick root path on the SFTP server"),
+    config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
+    formats: list[str] | None = USB_FORMAT_OPTION,
+) -> None:
+    """Review player edits and deliver selected prepared playlists interactively."""
+    _usb_step(
+        lambda: terminal.run(
+            Manager(load_usb_config(config, formats), load_usb_device_config(config), root)
+        )
+    )
 
 
 @usb_app.command(name="review")

@@ -243,7 +243,7 @@ fn key_name(key: &Key) -> String {
 }
 
 /// Waveforms for the audio at `path`, from the cache when the file is unchanged.
-fn waves(path: &Path, cache: &Path) -> Result<Waves> {
+fn waves(path: &Path, cache: &Path, prepared: bool) -> Result<Waves> {
     let meta = fs::metadata(path)?;
     let modified = meta.modified()?.duration_since(UNIX_EPOCH)?.as_nanos();
     let mut id = blake3::Hasher::new();
@@ -253,6 +253,13 @@ fn waves(path: &Path, cache: &Path) -> Result<Waves> {
     let cached = cache.join(id.finalize().to_hex().as_str());
     if let Ok(bytes) = fs::read(&cached) {
         return decode_waves(&bytes);
+    }
+    if prepared {
+        return Err(format!(
+            "Prepared waveform unavailable; refresh exports: {}",
+            path.display()
+        )
+        .into());
     }
     let mut stream = MonoStream::open(path)?;
     let mut creator = WaveCreator::new(stream.sample_rate());
@@ -336,11 +343,12 @@ fn source_track(
     library: &Path,
     cache: &Path,
     tag_ids: &HashMap<&str, u64>,
+    prepared: bool,
 ) -> Result<SourceTrack> {
     let source_path = library.join(&track.path);
     let grid = beats(&track.grid)?;
-    let waves =
-        waves(&source_path, cache).map_err(|e| format!("{}: {e}", source_path.display()))?;
+    let waves = waves(&source_path, cache, prepared)
+        .map_err(|e| format!("{}: {e}", source_path.display()))?;
     let analysis = author_with_rekordbox_waves(
         "",
         &grid,
@@ -440,6 +448,7 @@ fn prepare(
     library: &Path,
     cache: &Path,
     tag_ids: &HashMap<&str, u64>,
+    prepared: bool,
 ) -> Result<Vec<SourceTrack>> {
     let queue = Mutex::new(snapshot.tracks.iter().enumerate());
     let done = Mutex::new(Vec::with_capacity(snapshot.tracks.len()));
@@ -451,7 +460,7 @@ fn prepare(
                     let Some((i, track)) = queue.lock().map_err(|e| e.to_string())?.next() else {
                         return Ok(());
                     };
-                    let prepared = source_track(track, library, cache, tag_ids);
+                    let prepared = source_track(track, library, cache, tag_ids, prepared);
                     done.lock().map_err(|e| e.to_string())?.push((i, prepared));
                 }
             });
@@ -465,7 +474,13 @@ fn prepare(
     done.into_iter().map(|(_, track)| track).collect()
 }
 
-fn run(snapshot: &Path, library: &Path, destination: &Path, cache: &Path) -> Result<()> {
+fn run(
+    snapshot: &Path,
+    library: &Path,
+    destination: &Path,
+    cache: &Path,
+    prepared: bool,
+) -> Result<()> {
     let snapshot: Snapshot = serde_json::from_slice(&fs::read(snapshot)?)?;
     if snapshot.version != SNAPSHOT_VERSION {
         return Err(format!("Unsupported snapshot version {}", snapshot.version).into());
@@ -480,7 +495,7 @@ fn run(snapshot: &Path, library: &Path, destination: &Path, cache: &Path) -> Res
         .collect();
     let lists = playlists(&snapshot.playlists, &index)?;
     let (tags, tag_ids) = my_tags(&snapshot.tracks);
-    let tracks = prepare(&snapshot, library, cache, &tag_ids)?;
+    let tracks = prepare(&snapshot, library, cache, &tag_ids, prepared)?;
     let options = ExportOptions {
         root: Some(ExportRoot::Standard),
         ..Default::default()
@@ -510,13 +525,56 @@ fn run(snapshot: &Path, library: &Path, destination: &Path, cache: &Path) -> Res
     Ok(())
 }
 
+fn inspect(root: &Path) -> Result<()> {
+    use rbl_export::device_library::{Format, read};
+    let mode = if root.join("PIONEER/rekordbox/export.pdb").is_file() {
+        Format::DeviceLibrary
+    } else {
+        Format::OneLibrary
+    };
+    let library = read(root, mode)?;
+    let mut paths = HashMap::new();
+    let mut playlists = Vec::new();
+    for node in &library.nodes {
+        let mut path: Vec<&str> = paths.get(&node.parent).cloned().unwrap_or_default();
+        path.push(&node.name);
+        if !node.folder {
+            let tracks: Vec<_> = node
+                .tracks
+                .iter()
+                .map(|id| {
+                    let track = library
+                        .track(*id)
+                        .ok_or("Playlist names an unknown track")?;
+                    Ok::<_, Box<dyn Error + Send + Sync>>((track.master_content_id, &track.path))
+                })
+                .collect::<Result<_>>()?;
+            playlists.push((path.clone(), tracks));
+        }
+        paths.insert(node.id, path);
+    }
+    println!("{}", serde_json::to_string(&playlists)?);
+    Ok(())
+}
+
 fn main() -> std::process::ExitCode {
     let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
-    let [snapshot, library, destination, cache] = args.as_slice() else {
-        eprintln!("usage: pioneer-usb SNAPSHOT.json ENGINE_LIBRARY DESTINATION CACHE");
-        return std::process::ExitCode::from(2);
+    let result = match args.as_slice() {
+        [mode, root] if mode == Path::new("inspect") => inspect(root),
+        [snapshot, library, destination, cache] => {
+            run(snapshot, library, destination, cache, false)
+        }
+        [mode, snapshot, library, destination, cache] if mode == Path::new("assemble") => {
+            run(snapshot, library, destination, cache, true)
+        }
+        _ => {
+            eprintln!(
+                "usage: pioneer-usb [assemble] SNAPSHOT.json ENGINE_LIBRARY DESTINATION CACHE | inspect ROOT"
+            );
+            return std::process::ExitCode::from(2);
+        }
     };
-    match run(snapshot, library, destination, cache) {
+    match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("ERROR {error}");

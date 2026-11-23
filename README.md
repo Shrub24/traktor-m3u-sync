@@ -296,7 +296,7 @@ Run order: close Engine DJ (or stop the VM) → `export --format engine --dry-ru
 check matched tracks, playlists, memberships, and skips in the summary → open Engine DJ. Rollback is
 the operator's own step against the retained backup, taken while Engine stays offline.
 
-## DJ USB export (`usb build`, `usb push`, `usb review`)
+## DJ USB export and Sync Manager
 
 These commands read `[usb]` and `[usb.device]`, not the playlist store.
 
@@ -335,6 +335,12 @@ state_dir = "~/.local/state/playlist-sync/usb"
   (or file start if unavailable), or repeat `--track-id <id>` to limit the run. Existing A slots
   are kept. Engine USB uses A as its deck cue; Pioneer USB and reference XML mirror A into a
   memory cue without exporting Engine's deck cue.
+- `usb manage --root <path>` opens the Linux Sync Manager. Build once with this version
+  before opening it. The playlist tree starts from the stick's library. Space toggles a
+  playlist, Tab switches formats, ← reviews Engine player edits, and → previews the selected
+  export. Both directions ask for confirmation. Deselection removes the playlist from the
+  exported database, not its audio files. After importing player edits, refresh the prepared
+  exports before delivering again.
 - `usb review --root <path>` previews the stick's key, grid, hot cue and saved loop changes
   as per-track diffs. `--diff` shows all eligible changes; `--report review.json` records
   the full typed diff, including ignored main cues. With Engine closed, `--approve <code>`

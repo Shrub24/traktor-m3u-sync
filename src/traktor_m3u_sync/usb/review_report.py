@@ -47,7 +47,7 @@ def _value(value: object) -> str:
             return str(value)
 
 
-def show(review: Review, *, full: bool, applied: bool) -> None:
+def lines(review: Review, *, full: bool, applied: bool = False, color: bool = False) -> list[str]:
     selected = review.selected
     counts = Counter(change.field for change in selected)
     ignored = len(review.changes) - len(selected)
@@ -55,29 +55,41 @@ def show(review: Review, *, full: bool, applied: bool) -> None:
     breakdown = ", ".join(
         f"{counts[field]} {label.lower()}" for field, label in _LABELS.items() if counts[field]
     )
-    typer.echo(
+    output = [
         f"{len(selected)} changes {action}"
         + (f" ({breakdown})" if breakdown else "")
         + (f" · {ignored} main cues ignored" if ignored else "")
-    )
+    ]
     shown = selected if full else selected[:8]
     if shown:
-        typer.echo("Engine → stick")
+        output.append("Engine → stick")
     for _, group in groupby(shown, key=lambda change: change.ref):
         changes = list(group)
         first = changes[0]
-        typer.echo(" – ".join(filter(None, (first.artist, first.title or Path(first.path).name))))
+        output.append(
+            " – ".join(filter(None, (first.artist, first.title or Path(first.path).name)))
+        )
         for change in changes:
             label = _LABELS[change.field]
             if change.slot is not None:
                 label += f" {change.slot}"
-            before = typer.style(_value(change.current), fg=typer.colors.RED)
-            after = typer.style(_value(change.device), fg=typer.colors.GREEN)
-            typer.echo(f"  {label}: {before} → {after}")
+            before, after = _value(change.current), _value(change.device)
+            if color:
+                before = typer.style(before, fg=typer.colors.RED)
+                after = typer.style(after, fg=typer.colors.GREEN)
+            output.append(f"  {label}: {before} → {after}")
     if len(shown) < len(selected):
-        typer.echo(f"… {len(selected) - len(shown)} more; use --diff to show all")
+        output.append(f"… {len(selected) - len(shown)} more; use --diff to show all")
+    return output
+
+
+def show(review: Review, *, full: bool, applied: bool) -> None:
+    for line in lines(review, full=full, applied=applied, color=True):
+        typer.echo(line)
     if not applied:
-        typer.echo(f"Approval: {review.approval} · applies all {len(selected)} eligible changes")
+        typer.echo(
+            f"Approval: {review.approval} · applies all {len(review.selected)} eligible changes"
+        )
 
 
 def write_review(path: Path, review: Review) -> None:

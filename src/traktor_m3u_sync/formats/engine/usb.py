@@ -77,6 +77,7 @@ def _stage(
     staged_db = tree / DATABASE
     staged_db.parent.mkdir(parents=True)
     preflight_target(source_db)
+    source_hash = generation.file_sha256(source_db)
     with (
         closing(sqlite3.connect(source_db.as_uri() + "?mode=ro", uri=True)) as source,
         closing(sqlite3.connect(staged_db)) as db,
@@ -108,6 +109,9 @@ def _stage(
             " (SELECT count(*) FROM Track)"
         ).fetchone()
     files[DATABASE] = Entry(generation.file_sha256(staged_db), staged_db.stat().st_size)
+    if generation.file_sha256(source_db) != source_hash:
+        raise EngineUsbError("Engine changed during the USB build; retry with Engine closed")
+    (path / "source.sha256").write_text(source_hash)
     published = generation.publish(path, files, (DATABASE,))
     return BuildResult(published, device, playlists, memberships, tracks)
 
@@ -128,13 +132,17 @@ def _select(db: sqlite3.Connection, root: str | None, source_uuid: str) -> None:
     ).fetchone()
     if invalid is not None:
         raise EngineUsbError(f"Unresolved or non-local playlist track: {invalid[0]}")
+    _prune_tracks(db)
+    for table in ("PreparelistEntity", "Smartlist", "Pack"):
+        db.execute(f"DELETE FROM {table}")
+
+
+def _prune_tracks(db: sqlite3.Connection) -> None:
     db.execute("DELETE FROM Track WHERE id NOT IN (SELECT trackId FROM PlaylistEntity)")
     db.execute(
         "DELETE FROM AlbumArt WHERE id NOT IN "
         "(SELECT albumArtId FROM Track WHERE albumArtId IS NOT NULL)"
     )
-    for table in ("PreparelistEntity", "Smartlist", "Pack"):
-        db.execute(f"DELETE FROM {table}")
 
 
 def _assets(
@@ -195,15 +203,22 @@ def _stick_path(audio: Path, root: Path) -> PurePosixPath:
     return PurePosixPath("Music", *(_UNSAFE.sub("_", part).rstrip(". ") for part in parts))
 
 
-def adopt(export: Generation, stick_database: Path, work: Path) -> Generation:
+def adopt(
+    export: Generation,
+    stick_database: Path | None,
+    work: Path,
+    selected: frozenset[tuple[str, ...]] | None = None,
+) -> Generation:
     """Point tracks the stick already has at the audio paths it uses, so that audio is kept."""
-    with closing(sqlite3.connect(stick_database.as_uri() + "?mode=ro", uri=True)) as stick:
-        existing = {
-            (origin, track_id): path
-            for origin, track_id, path in stick.execute(
-                "SELECT originDatabaseUuid, originTrackId, path FROM Track"
+    existing: dict[tuple[str, int], str] = {}
+    if stick_database is not None:
+        with closing(sqlite3.connect(stick_database.as_uri() + "?mode=ro", uri=True)) as stick:
+            existing.update(
+                ((origin, track_id), path)
+                for origin, track_id, path in stick.execute(
+                    "SELECT originDatabaseUuid, originTrackId, path FROM Track"
+                )
             )
-        }
     shutil.rmtree(work, ignore_errors=True)
     tree = work / generation.TREE
     database = tree / DATABASE
@@ -213,6 +228,9 @@ def adopt(export: Generation, stick_database: Path, work: Path) -> Generation:
         (tree / LIBRARY / shared).symlink_to(export.tree / LIBRARY / shared)
     renamed: dict[str, str] = {}
     with closing(sqlite3.connect(database)) as db, db:
+        names = export.files.keys() - {DATABASE}
+        if selected is not None:
+            names = _retain_playlists(db, selected)
         for track_id, origin, origin_id, path in db.execute(
             "SELECT id, originDatabaseUuid, originTrackId, path FROM Track"
         ).fetchall():
@@ -231,13 +249,49 @@ def adopt(export: Generation, stick_database: Path, work: Path) -> Generation:
                 "UPDATE Track SET path = ?, filename = ? WHERE id = ?",
                 (old, PurePosixPath(old).name, track_id),
             )
-    files = {
-        renamed.get(name, name): entry for name, entry in export.files.items() if name != DATABASE
-    }
-    if len(files) != len(export.files) - 1:
+    files = {renamed.get(name, name): export.files[name] for name in names}
+    if len(files) != len(names):
         raise EngineUsbError("Two tracks would share a stick path")
     files[DATABASE] = Entry(generation.file_sha256(database), database.stat().st_size)
     return Generation(work, files, export.activation)
+
+
+def _retain_playlists(db: sqlite3.Connection, selected: frozenset[tuple[str, ...]]) -> set[str]:
+    db.execute("PRAGMA foreign_keys = ON")
+    db.execute("PRAGMA recursive_triggers = ON")
+    paths: dict[tuple[str, ...], int] = {}
+    for list_id, encoded in db.execute("""
+        WITH RECURSIVE tree(id, path) AS (
+            SELECT id, json_array(title) FROM Playlist WHERE parentListId = 0
+            UNION ALL
+            SELECT p.id, json_insert(t.path, '$[#]', p.title)
+            FROM Playlist p JOIN tree t ON p.parentListId = t.id
+        ) SELECT id, path FROM tree
+    """):
+        path = tuple(json.loads(encoded))
+        if path in paths:
+            raise EngineUsbError(f"Ambiguous playlist path: {' / '.join(path)}")
+        paths[path] = list_id
+    if selected - paths.keys():
+        raise EngineUsbError("Playlist selection is not present in the prepared export")
+    kept = {path[:i] for path in selected for i in range(1, len(path) + 1)}
+    db.executemany(
+        "DELETE FROM Playlist WHERE id = ?",
+        ((list_id,) for path, list_id in paths.items() if path not in kept),
+    )
+    db.executemany(
+        "DELETE FROM PlaylistEntity WHERE listId = ?",
+        ((paths[path],) for path in kept - selected),
+    )
+    _prune_tracks(db)
+    device = db.execute("SELECT uuid FROM Information").fetchone()[0]
+    files: set[str] = set()
+    for track_id, path in db.execute("SELECT id, path FROM Track"):
+        files.update((f"{LIBRARY}/{path}", f"{LIBRARY}/{_OVERVIEW}/{device}/{track_id}.rgb"))
+    for (digest,) in db.execute("SELECT DISTINCT hash FROM AlbumArt WHERE hash IS NOT NULL"):
+        name = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+        files.add(f"{LIBRARY}/Artwork/{name}.jpg")
+    return files
 
 
 def _device_uuid(path: Path) -> uuid.UUID:

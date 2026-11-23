@@ -3,7 +3,7 @@
 - [ ] 1.1 Add the versioned run report and progress at operation boundaries; render the same data in the CLI.
 - [ ] 1.2 Compose refresh through the existing operations and downstream fetch/guest runners; cover analysis skipped, analysis failed, and per-format partial publication.
 - [ ] 1.3 Compose per-format selection and library assembly from prepared artifacts, stick review and delivery, with approval guards and retry.
-- [ ] 1.4 Build the Linux Sync Manager tree, action markers and separate import/export confirmation popups.
+- [x] 1.4 Build the Linux Sync Manager tree, action markers and separate import/export confirmation popups.
 
 ## 2. Deployment and validation
 

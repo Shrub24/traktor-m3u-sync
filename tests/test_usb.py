@@ -21,6 +21,7 @@ from paramiko import Channel, SFTPClient
 from typer.testing import CliRunner, Result
 
 from traktor_m3u_sync import cli
+from traktor_m3u_sync.config import UsbConfig, UsbDeviceConfig
 from traktor_m3u_sync.formats.engine import usb
 from traktor_m3u_sync.formats.engine.performance import (
     QuickCue,
@@ -33,6 +34,7 @@ from traktor_m3u_sync.formats.engine.usb import DATABASE, EngineUsbError
 from traktor_m3u_sync.usb import generation
 from traktor_m3u_sync.usb import sftp as delivery
 from traktor_m3u_sync.usb.generation import Entry, Generation
+from traktor_m3u_sync.usb.manager import Manager, marker
 from traktor_m3u_sync.usb.pioneer import DATABASES
 from traktor_m3u_sync.usb.sftp import MARKER, DeliveryError, StickState, enter_stick, pull, push
 
@@ -114,6 +116,80 @@ def _rows(database: Path, sql: str) -> list[tuple[object, ...]]:
 
 def _build(library: Library, output: Path, root: str | None = "Sync") -> Generation:
     return usb.build(library.path, output, root).generation
+
+
+def test_assemble_selected_playlists_from_prepared_engine_library(tmp_path: Path) -> None:
+    library = Library(tmp_path)
+    first = library.track("one.mp3", b"one")
+    second = library.track("two.mp3", b"two")
+    folder = library.playlist("Sync")
+    library.add(library.playlist("Keep", folder), first)
+    library.add(library.playlist("Drop", folder), second)
+    prepared = _build(library, tmp_path / "out")
+    subset = usb.adopt(prepared, None, tmp_path / "subset", frozenset({("Sync", "Keep")}))
+
+    assert _rows(subset.local(DATABASE), "SELECT title FROM Playlist ORDER BY id") == [
+        ("Sync",),
+        ("Keep",),
+    ]
+    assert _rows(subset.local(DATABASE), "SELECT trackId FROM PlaylistEntity") == [(first,)]
+    assert _rows(subset.local(DATABASE), "PRAGMA foreign_key_check") == []
+    assert {name for name in subset.files if name.endswith(".mp3")} == {
+        "Engine Library/Music/one.mp3"
+    }
+    assert _rows(prepared.local(DATABASE), "SELECT count(*) FROM Track") == [(2,)]
+
+
+def test_manager_delivers_selected_playlists_only_after_confirmation(
+    tmp_path: Path, stick: tuple[_Stick, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, root = stick
+    library = Library(tmp_path)
+    first = library.track("one.mp3", b"one")
+    second = library.track("two.mp3", b"two")
+    folder = library.playlist("Sync")
+    library.add(library.playlist("One", folder), first)
+    library.add(library.playlist("Two", folder), second)
+    output = tmp_path / "exports"
+    _build(library, output / "engine")
+    manager = Manager(
+        UsbConfig(library.path, output, "Sync", ("engine",)),
+        UsbDeviceConfig(
+            "unused", "unused", tmp_path / "key", tmp_path / "hosts", tmp_path / "state"
+        ),
+        str(root),
+    )
+
+    def session(_: UsbDeviceConfig) -> nullcontext[_Stick]:
+        return nullcontext(client)
+
+    monkeypatch.setattr(delivery, "session", session)
+    local, remote = manager.inspect("engine")
+    selection = {("Sync", "One")}
+    assert marker(("Sync", "One"), selection, local, remote) == "+"
+    declined = manager.export("engine", selection, (local, remote), lambda _plan, _sha: False)
+    assert declined.files and not declined.applied
+    assert not (root / MARKER).exists() and not (root / DATABASE).exists()
+    delivered = manager.export("engine", selection, (local, remote), lambda _plan, _sha: True)
+    assert delivered.applied
+    assert _rows(root / DATABASE, "SELECT trackId FROM PlaylistEntity") == [(first,)]
+    assert set(manager.inspect("engine")[1]) == selection
+    assert not (root / "Engine Library/Music/two.mp3").exists()
+
+    local, remote = manager.inspect("engine")
+    second_selection = {("Sync", "Two")}
+
+    def changed_stick(*_: object) -> bool:
+        with closing(sqlite3.connect(root / DATABASE)) as database, database:
+            database.execute("UPDATE Playlist SET title = 'Edited' WHERE title = 'One'")
+        return True
+
+    with pytest.raises(DeliveryError, match="changed"):
+        manager.export("engine", second_selection, (local, remote), changed_stick)
+    assert _rows(root / DATABASE, "SELECT title FROM Playlist WHERE parentListId <> 0") == [
+        ("Edited",)
+    ]
+    assert not (root / "Engine Library/Music/two.mp3").exists()
 
 
 def test_prepared_start_is_previewed_and_projected_only_to_the_stick(tmp_path: Path) -> None:

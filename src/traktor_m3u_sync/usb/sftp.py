@@ -141,6 +141,8 @@ def push(
     apply: bool,
     reviewed: str | None = None,
     rescan: bool = False,
+    confirm: Callable[[PushResult], bool] | None = None,
+    progress: Callable[[str, int, int], None] | None = None,
     register: Callable[[], StickState] | None = None,
     hash_audio: Callable[[SFTPClient, tuple[str, ...]], Mapping[str, str]] | None = None,
 ) -> PushResult:
@@ -228,6 +230,15 @@ def push(
         if media:
             _write(scan, json.dumps({key: digests}).encode())
         return result
+    if confirm is not None:
+        if not confirm(result):
+            return PushResult(changes, size, False, reused, missing, changed)
+        for name in generation.activation:
+            actual = (
+                None if _mode(sftp, name) is None else hashlib.sha256(_read(sftp, name)).hexdigest()
+            )
+            if actual != switching[name][0]:
+                raise DeliveryError(f"{name} changed during confirmation; preview again")
     if register is not None:
         state = register()
     if media:
@@ -241,17 +252,24 @@ def push(
         _check_replace(sftp, generation.activation[0], made)
         # SFTP renames are atomic individually, not as a group.
         state.record("pending.json", switching)
+        sent = 0
         for name in assets:
+            if progress is not None:
+                progress("Transferring assets", sent, size)
             entry = generation.files[name]
             _make_dirs(sftp, PurePosixPath(name), made)
             _upload(sftp, generation.local(name), name, entry.sha256)
+            sent += entry.size
 
         if media:
             state.record(audio_cache, {name: desired[name] for name in media})
         for name in databases:
+            if progress is not None:
+                progress("Publishing library", sent, size)
             database = generation.local(name)
             state.keep(database.read_bytes())
             _upload(sftp, database, name, desired[name])
+            sent += generation.files[name].size
     state.record("installed.json", desired)
     (state.path / "pending.json").unlink(missing_ok=True)
     return result
