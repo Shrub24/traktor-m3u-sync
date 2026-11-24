@@ -135,6 +135,35 @@ class UsbDeviceConfig:
 USB_FORMATS = ("engine", "pioneer")
 
 
+@dataclass(frozen=True)
+class RefreshConfig:
+    units: tuple[str, ...]
+    report_file: Path | None
+    reports: dict[str, Path]
+
+
+def load_refresh_config(path: Path) -> RefreshConfig:
+    table = _require_table(_read_toml(path), "refresh")
+    units = table.get("units")
+    if (
+        not isinstance(units, list)
+        or not units
+        or not all(isinstance(unit, str) and unit for unit in cast(list[object], units))
+    ):
+        raise ConfigError("[refresh].units must be a nonempty list of unit names")
+    reports = table.get("reports", {})
+    if not isinstance(reports, dict) or not all(
+        isinstance(value, str) for value in cast(dict[str, object], reports).values()
+    ):
+        raise ConfigError("[refresh].reports must map unit names to report paths")
+    paths = {unit: Path(report) for unit, report in cast(dict[str, str], reports).items()}
+    if paths.keys() - set(cast(list[str], units)):
+        raise ConfigError("[refresh].reports names a unit not in [refresh].units")
+    return RefreshConfig(
+        tuple(cast(list[str], units)), _optional_path(table, "report_file", "refresh"), paths
+    )
+
+
 def load_usb_config(path: Path, selected: list[str] | None = None) -> UsbConfig:
     table = _require_table(_read_toml(path), "usb")
     library = _optional_path(table, "library", "usb")

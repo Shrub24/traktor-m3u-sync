@@ -8,9 +8,11 @@ from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 from time import monotonic
+from typing import cast
 
 import typer
 
+from . import refresh as refresh_workflow
 from .config import (
     DEFAULT_CONFIG_PATH,
     AppConfig,
@@ -18,6 +20,7 @@ from .config import (
     apply_export_overrides,
     apply_import_overrides,
     load_config,
+    load_refresh_config,
     load_usb_config,
     load_usb_device_config,
 )
@@ -44,6 +47,34 @@ app = typer.Typer(
 def version() -> None:
     """Show the current bootstrap version marker."""
     typer.echo("traktor-m3u-sync bootstrap")
+
+
+@app.command(name="refresh")
+def refresh_command(config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config")) -> None:
+    """Run the configured refresh units in order; stop at the first failure."""
+    try:
+        settings = load_refresh_config(config)
+    except ConfigError as exc:
+        typer.echo(f"ERROR code=config_error detail={exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    outcome, steps = refresh_workflow.run(settings)
+    for step in steps:
+        line = f"STEP unit={step.unit} status={step.status} seconds={step.seconds}"
+        typer.echo(line + (f" detail={step.detail}" if step.detail else ""))
+        formats = cast(
+            list[dict[str, object]], step.report.get("formats", []) if step.report else []
+        )
+        for entry in formats:
+            kept = entry.get("previous") or "none"
+            state = (
+                f"generation={entry['generation']}"
+                if entry.get("error") is None
+                else f"failed previous={kept} detail={entry['error']}"
+            )
+            typer.echo(f"  format={entry['format']} {state}")
+    typer.echo(f"SUMMARY status={outcome}")
+    if outcome != "succeeded":
+        raise typer.Exit(code=1)
 
 
 @app.command(name="import")

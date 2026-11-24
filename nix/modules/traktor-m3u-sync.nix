@@ -235,6 +235,58 @@ let
     };
   };
 
+  refreshModule = lib.types.submodule {
+    options = {
+      units = lib.mkOption {
+        type = lib.types.nonEmptyListOf lib.types.str;
+        example = [
+          "traktor-m3u-sync-import@navidrome.service"
+          "traktor-m3u-sync-usb-build@dj.service"
+        ];
+        description = "Units started in order; a failed unit skips the rest.";
+      };
+      reports = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = { };
+        description = "JSON report written by a unit, attached to its step. USB build units are added automatically.";
+      };
+      reportFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "/var/lib/playlist-sync/refresh.json";
+      };
+    };
+  };
+  refreshUnits = lib.unique (
+    lib.concatMap (refresh: refresh.units) (builtins.attrValues cfg.refresh)
+  );
+  usbBuildReport = usb: "${usb.output_dir}/build-report.json";
+  refreshService =
+    name: refresh:
+    let
+      builds = lib.mapAttrs' (
+        usbName: usb: lib.nameValuePair "traktor-m3u-sync-usb-build@${usbName}.service" (usbBuildReport usb)
+      ) usbExports;
+      settings = toml.generate "traktor-m3u-sync-refresh-${name}.toml" {
+        refresh = nonNull {
+          inherit (refresh) units;
+          reports = lib.filterAttrs (unit: _: lib.elem unit refresh.units) builds // refresh.reports;
+          report_file = refresh.reportFile;
+        };
+      };
+    in
+    lib.nameValuePair "traktor-m3u-sync-refresh-${name}" {
+      description = "Playlist sync refresh ${name}";
+      serviceConfig = commonServiceConfig // {
+        ExecStart = utils.escapeSystemdExecArgs [
+          (lib.getExe cfg.package)
+          "refresh"
+          "--config"
+          (toString settings)
+        ];
+      };
+    };
+
   usbExports = cfg.usb;
   usbConfig =
     name: usb:
@@ -254,6 +306,8 @@ let
           "build"
           "--config"
           (toString (usbConfig name usb))
+          "--report-file"
+          (usbBuildReport usb)
         ])
       ];
     };
@@ -557,6 +611,12 @@ in
       default = { };
       description = "Named USB exports: a build unit and, with a device, a push template instanced by the stick root.";
     };
+
+    refresh = lib.mkOption {
+      type = lib.types.attrsOf refreshModule;
+      default = { };
+      description = "Named refresh workflows: one unit that starts other units in order and reports one outcome.";
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -587,7 +647,13 @@ in
       }
     ]
     ++ stateAssertions
-    ++ jobAssertions;
+    ++ jobAssertions
+    ++ [
+      {
+        assertion = cfg.refresh == { } || cfg.user != null;
+        message = "services.traktor-m3u-sync.refresh needs a non-root user for its polkit rule.";
+      }
+    ];
 
     users.groups = lib.optionalAttrs (cfg.user == "playlist-sync" && cfg.group == "playlist-sync") {
       playlist-sync = { };
@@ -611,6 +677,22 @@ in
       }
       // builtins.listToAttrs (lib.mapAttrsToList instanceService jobs)
       // builtins.listToAttrs (lib.mapAttrsToList usbBuildService usbExports)
-      // builtins.listToAttrs (lib.mapAttrsToList usbPushService usbPushExports);
+      // builtins.listToAttrs (lib.mapAttrsToList usbPushService usbPushExports)
+      // builtins.listToAttrs (lib.mapAttrsToList refreshService cfg.refresh);
+
+    security.polkit = lib.mkIf (cfg.refresh != { } && cfg.user != null) {
+      enable = true;
+      extraConfig = ''
+        polkit.addRule(function(action, subject) {
+          var units = ${builtins.toJSON refreshUnits};
+          if (action.id == "org.freedesktop.systemd1.manage-units"
+              && subject.user == ${builtins.toJSON cfg.user}
+              && action.lookup("verb") == "start"
+              && units.indexOf(action.lookup("unit")) >= 0) {
+            return polkit.Result.YES;
+          }
+        });
+      '';
+    };
   };
 }

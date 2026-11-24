@@ -173,6 +173,13 @@
                             output_dir = "/var/lib/playlist-sync/usb/build-only";
                           };
                         };
+                        refresh.dj = {
+                          units = [
+                            "traktor-m3u-sync-import@ingest.service"
+                            "traktor-m3u-sync-usb-build@sc6000.service"
+                          ];
+                          reportFile = "/var/lib/playlist-sync/refresh.json";
+                        };
                       };
                     }
                   ];
@@ -188,6 +195,11 @@
                 reporting = services."traktor-m3u-sync-export@reporting";
                 usbBuild = services."traktor-m3u-sync-usb-build@sc6000";
                 usbPush = services."traktor-m3u-sync-usb-push-sc6000@";
+                refresh = services."traktor-m3u-sync-refresh-dj";
+                refreshOk =
+                  refresh.serviceConfig.User == "playlist-sync"
+                  && nixpkgs.lib.hasInfix "build-report.json" (builtins.elemAt usbBuild.serviceConfig.ExecStart 1)
+                  && nixpkgs.lib.hasInfix "traktor-m3u-sync-usb-build@sc6000.service" evaled.config.security.polkit.extraConfig;
                 usbOk =
                   builtins.match ".*\"usb\" \"build\" \"--config\" .*" (
                     builtins.elemAt usbBuild.serviceConfig.ExecStart 1
@@ -333,6 +345,21 @@
                 ${if execOk then "" else "echo 'FAIL: escaped job argv'; exit 1"}
                 ${if reportOk then "" else "echo 'FAIL: reportFile argv escaping'; exit 1"}
                 ${if usbOk then "" else "echo 'FAIL: USB build/push units'; exit 1"}
+                ${if refreshOk then "" else "echo 'FAIL: refresh unit'; exit 1"}
+
+                refresh_config=$(echo '${refresh.serviceConfig.ExecStart}' | sed 's/.*"--config" "\([^"]*\)".*/\1/')
+                mkdir bin
+                printf '#!/bin/sh\nexit 0\n' > bin/systemctl
+                chmod +x bin/systemctl
+                if ! PATH="$PWD/bin:$PATH" traktor-m3u-sync refresh --config "$refresh_config" > loader.out 2>&1; then
+                  case "$(< loader.out)" in
+                    *'ERROR code=config_error'*)
+                      echo "FAIL: packaged CLI rejected generated refresh config"
+                      cat loader.out
+                      exit 1
+                      ;;
+                  esac
+                fi
 
                 usb_config=$(echo '${usbPush.serviceConfig.ExecStart}' | sed 's/.*"--config" "\([^"]*\)".*/\1/')
                 for command in build "push --root /stick"; do

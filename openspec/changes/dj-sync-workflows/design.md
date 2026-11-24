@@ -8,6 +8,8 @@ The deployment supplies the playlist fetch and Engine-offline operations. In hom
 
 Systemd supervises the invocation, controls the identity and resources, and routes logs and terminal failure notifications. The generic import/export jobs and their success fan-out remain available. For the downstream DJ refresh, replace the operator-facing success chain with one supervised workflow, not a second entry point executing the same chain in parallel.
 
+Refresh sequences the existing units rather than running their writes in-process: `refresh` starts each configured unit in order with `systemctl start`, under a polkit rule limited to exactly those units, and stops at the first failure. Each unit keeps its identity and its conflict with the Engine VM, so the write window stays exclusive even against a manual VM start. A unit's own JSON report, when it wrote one during this run, is attached to its step; a USB build report marks the step `partial` when only some formats published. Rejected: in-process writes (the app would own VM exclusion) and a reporter over the `OnSuccess=` chain (outcomes stay split across unit runs).
+
 ## Actions
 
 - **Refresh exports:** fetch → import playlists → update Engine → analyze pending tracks if needed → verify Engine is closed → build selected formats. There is no stick I/O. Skipping guest analysis does not skip export: playlist membership or order may still have changed.

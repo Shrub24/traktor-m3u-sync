@@ -206,6 +206,26 @@ settings. The job `format` is still required — it is passed to the CLI as
 
 #### Downstream orchestration
 
+#### Refresh
+
+`refresh.<name>.units` generates `traktor-m3u-sync-refresh-<name>.service`, which starts
+the listed units in order and stops at the first failure. Each unit keeps its own identity
+and conflicts; a polkit rule lets the worker identity start only those units. USB build
+units write `build-report.json` in their output directory, attached to their step, so a
+format that failed while another published reports `partial`. `reportFile` records the run.
+
+```nix
+services.traktor-m3u-sync.refresh.dj = {
+  units = [
+    "traktor-m3u-sync-import@navidrome.service"
+    "traktor-m3u-sync-export@engine.service"
+    "engine-dj-analysis.service"
+    "traktor-m3u-sync-usb-build@dj.service"
+  ];
+  reportFile = "/var/lib/playlist-sync/refresh.json";
+};
+```
+
 Job services are oneshot units with no implicit triggers — no timers, path
 triggers, or Syncthing hooks are bundled. Attach scheduling or filesystem
 triggers in your own NixOS config (e.g. `systemd.timers` or Syncthing folder
